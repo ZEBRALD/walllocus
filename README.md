@@ -95,6 +95,14 @@ The wallpaper is an `NSWindow` at the desktop window level hosting an `AVPlayerL
 
 Reaching those would require the private `WallpaperExtensionKit` framework, which is out of scope for a small utility.
 
+### What about a screen saver?
+
+A `.saver` bundle **does not work on macOS 26**: the system no longer scans
+`~/Library/Screen Savers/` and only lists ExtensionKit `.appex` extensions for
+`com.apple.screensaver`. Even Apple's own bundled `.saver` files are no longer
+registered. See [SCREENSAVER.md](SCREENSAVER.md) for the full evidence and the
+renderer code we kept for a future extension-based attempt.
+
 ## Configuration
 
 State lives in `UserDefaults` under bundle id `app.walllocus`:

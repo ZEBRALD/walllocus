@@ -16,9 +16,8 @@ import UniformTypeIdentifiers
 
 // MARK: - 模型
 
-enum ScaleMode: String, Codable, CaseIterable {
-    case fill, fit, stretch
-
+// ScaleMode 定义在 Rendering.swift（与屏保共用），这里只加界面用的本地化标签
+extension ScaleMode {
     var label: String {
         switch self {
         case .fill: return L10n.t("mode.fill")
@@ -31,22 +30,11 @@ enum ScaleMode: String, Codable, CaseIterable {
 enum MediaKind: String, Codable {
     case video, image
 
-    static let imageExts: Set<String> = ["png", "jpg", "jpeg", "heic", "heif", "tiff", "tif", "bmp", "webp", "gif"]
-
     static func detect(_ path: String) -> MediaKind {
-        let ext = (path as NSString).pathExtension.lowercased()
-        return imageExts.contains(ext) ? .image : .video
+        Rendering.isImagePath(path) ? .image : .video
     }
 
     var label: String { self == .video ? L10n.t("kind.video") : L10n.t("kind.image") }
-}
-
-/// 一个素材在**某一块显示器**上的画面调整量
-struct Adjustment: Codable, Equatable {
-    var mode: ScaleMode = .fill
-    var zoom: Double = 1.0
-    var offsetX: Double = 0.0
-    var offsetY: Double = 0.0
 }
 
 struct LibraryItem: Codable, Equatable {
@@ -186,29 +174,10 @@ final class WallpaperView: NSView {
     }
 
     func layoutMedia() {
-        let b = bounds
-        guard b.width > 1, b.height > 1 else { return }
-        guard mediaSize.width > 1, mediaSize.height > 1 else {
-            applyFrame(b)
-            return
-        }
-        var base: CGSize
-        switch adjustment.mode {
-        case .stretch:
-            base = b.size
-        case .fill:
-            let s = max(b.width / mediaSize.width, b.height / mediaSize.height)
-            base = CGSize(width: mediaSize.width * s, height: mediaSize.height * s)
-        case .fit:
-            let s = min(b.width / mediaSize.width, b.height / mediaSize.height)
-            base = CGSize(width: mediaSize.width * s, height: mediaSize.height * s)
-        }
-        let z = CGFloat(max(0.05, adjustment.zoom))
-        let w = base.width * z
-        let h = base.height * z
-        let cx = b.midX + CGFloat(adjustment.offsetX) * b.width * 0.5
-        let cy = b.midY + CGFloat(adjustment.offsetY) * b.height * 0.5
-        applyFrame(CGRect(x: cx - w * 0.5, y: cy - h * 0.5, width: w, height: h))
+        // 布局算法与屏保共用，见 Rendering.swift
+        applyFrame(Rendering.layerFrame(bounds: bounds,
+                                        mediaSize: mediaSize,
+                                        adjustment: adjustment))
     }
 
     private func applyFrame(_ r: CGRect) {

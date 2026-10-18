@@ -96,6 +96,13 @@ open /Applications/WallLocus.app
 
 要做这两点需要私有的 `WallpaperExtensionKit` 框架，超出小工具的范畴。
 
+### 关于屏保
+
+`.saver` 屏保在 **macOS 26 上不可用**：系统不再扫描 `~/Library/Screen Savers/`，
+屏保面板只列出 ExtensionKit `.appex` 扩展（扩展点 `com.apple.screensaver`）。
+连 Apple 自己内置的 `.saver` 也不再被注册。完整证据链见 [SCREENSAVER.md](SCREENSAVER.md)，
+其中也保留了为将来做扩展方案而写的渲染代码。
+
 ## 配置
 
 状态存在 bundle id `app.walllocus` 的 `UserDefaults` 中：

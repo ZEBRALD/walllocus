@@ -15,9 +15,13 @@ FLAGS=(-swift-version 5 -O
 rm -rf "$BUILD"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
+# Sources shared by the app and (later) the screen saver.
+# Rendering.swift and SharedConfig.swift are AppKit-free so both targets can link them.
+SOURCES=("$DIR/main.swift" "$DIR/L10n.swift" "$DIR/Rendering.swift" "$DIR/SharedConfig.swift")
+
 compile_arch() {
   local arch="$1" out="$2"
-  swiftc "${FLAGS[@]}" -target "$arch-apple-macos13.0" -o "$out" "$DIR/main.swift" "$DIR/L10n.swift"
+  swiftc "${FLAGS[@]}" -target "$arch-apple-macos13.0" -o "$out" "${SOURCES[@]}"
 }
 
 echo "==> Compiling $APP_NAME"
@@ -49,3 +53,8 @@ codesign --force --deep --sign - "$APP" >/dev/null 2>&1 \
 
 echo "==> Done: $APP"
 echo "    architectures: $(lipo -archs "$BIN" 2>/dev/null || echo unknown)"
+
+# Screen saver target intentionally omitted.
+# macOS 26 no longer discovers .saver bundles in ~/Library/Screen Savers/:
+# pluginkit only lists ExtensionKit .appex extensions for com.apple.screensaver.
+# The renderer in ScreenSaver/ is kept for reference (see SCREENSAVER.md).
