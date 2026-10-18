@@ -1,0 +1,18 @@
+# Build output
+build/
+*.app
+*.dmg
+
+# macOS
+.DS_Store
+._*
+
+# Xcode / Swift
+*.xcodeproj
+*.xcworkspace
+.swiftpm/
+*.o
+*.dSYM
+
+# Local
+*.hev1bak.mp4

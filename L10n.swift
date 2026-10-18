@@ -1,0 +1,153 @@
+import Foundation
+
+// ============================================================
+//  L10n — 轻量内嵌本地化（无需 .lproj 资源文件）
+//  跟随系统首选语言：zh* 用中文，其余一律英文
+// ============================================================
+
+enum L10n {
+    /// 是否使用中文界面
+    static let isChinese: Bool = {
+        let lang = Locale.preferredLanguages.first ?? "en"
+        return lang.hasPrefix("zh")
+    }()
+
+    /// 取本地化字符串；中文表缺失的键回退到英文，再回退到键本身
+    static func t(_ key: String) -> String {
+        if isChinese, let zh = zh[key] { return zh }
+        return en[key] ?? key
+    }
+
+    /// 带参数的本地化（格式串用 %@ / %d / %.2f 占位）
+    static func t(_ key: String, _ args: CVarArg...) -> String {
+        String(format: t(key), arguments: args)
+    }
+
+    private static let en: [String: String] = [
+        "mode.fill": "Fill (crop edges)",
+        "mode.fit": "Fit (letterbox)",
+        "mode.stretch": "Stretch",
+        "kind.video": "Video",
+        "kind.image": "Image",
+        "common.mainScreen": " (Main)",
+        "common.allDisplays": "All displays (sync)",
+        "common.allDisplaysCount": "All displays (%d)",
+        "common.unknownDisplay": "Unknown display",
+        "win.title": "WallLocus — Video / Image Wallpaper",
+        "win.subtitle": "AVPlayer hardware decoding, very low overhead. Every wallpaper remembers its own adjustment on every display.",
+        "win.targetDisplay": "Target display",
+        "win.library": "Library",
+        "win.addFiles": "Add files…",
+        "win.setWallpaper": "Set as wallpaper",
+        "win.removeFromLibrary": "Remove from library",
+        "win.stopAll": "Stop all wallpapers",
+        "win.pause": "Pause",
+        "win.resume": "Resume",
+        "win.muteVideo": "Mute (video only)",
+        "win.launchAtLogin": "Launch at login",
+        "win.scaleMode": "Scale mode",
+        "win.zoom": "Zoom",
+        "win.offsetX": "Horizontal",
+        "win.offsetY": "Vertical",
+        "win.hint": "These adjustments apply only to the pair \"target display x selected wallpaper\"; switching either one keeps its own values. The fields on the right accept precise input (two decimals): zoom takes \"150\" or a factor \"1.5\", position is relative to the screen where 0 = centred and ±1 = edge.",
+        "win.scope.none": "Scope: none (add a file first)",
+        "win.scope.noDisplay": "Scope: no display detected",
+        "win.scope": "Scope: %@  x  \"%@\"",
+        "win.libraryEmpty": "(library is empty — add files)",
+        "win.status": "%d displays, %d showing wallpaper; %d in library; auto-start %@",
+        "win.autoOn": "on",
+        "win.autoOff": "off",
+        "win.openPanelTitle": "Add videos or images",
+        "compat.fixButton": "Fix container tag (hev1 → hvc1)",
+        "compat.hev1": "⚠️ This video uses HEV1 packaging, which macOS cannot decode (black screen)",
+        "compat.undecodable": "⚠️ macOS cannot decode this video (codec %@)",
+        "compat.unknown": "unknown",
+        "compat.readFail": "⚠️ Could not read the file, cannot repair",
+        "compat.noTag": "⚠️ No hev1 tag found, cannot repair automatically",
+        "compat.writeFail": "⚠️ Write failed: %@",
+        "compat.fixed": "✅ Rewrote %d tag(s) (backup: %@), now playable",
+        "compat.summary": "Current: zoom %.2f%% · horizontal %.2f · vertical %.2f",
+        "compat.noSelection": "Current: no wallpaper selected",
+        "fs.paused": "⏸ Full screen — paused: %@",
+        "menu.about": "About WallLocus",
+        "menu.hide": "Hide WallLocus",
+        "menu.quit": "Quit WallLocus",
+        "menu.open": "Open WallLocus",
+        "menu.playback": "Playback",
+        "menu.displays": "Displays",
+        "menu.scaleMode": "Scale mode",
+        "menu.settings": "Settings",
+        "menu.pauseWallpaper": "Pause wallpaper",
+        "menu.resumeWallpaper": "Resume wallpaper",
+        "menu.allDisplays": "All displays",
+        "menu.stopAll": "Stop all wallpapers",
+        "menu.pauseOnFullscreen": "Pause on full-screen apps",
+        "menu.pauseOnBattery": "Pause on battery",
+        "menu.launchAtLogin": "Launch at login",
+        "menu.tooltip": "WallLocus — Video / Image Wallpaper",
+    ]
+
+    private static let zh: [String: String] = [
+        "mode.fill": "填充（裁剪边缘）",
+        "mode.fit": "适应（留黑边）",
+        "mode.stretch": "拉伸铺满",
+        "kind.video": "视频",
+        "kind.image": "图片",
+        "common.mainScreen": "（主屏）",
+        "common.allDisplays": "全部显示器（同步设置）",
+        "common.allDisplaysCount": "全部显示器（%d 块）",
+        "common.unknownDisplay": "未知显示器",
+        "win.title": "WallLocus — 视频 / 图片壁纸",
+        "win.subtitle": "AVPlayer 硬件解码，占用极低。每个素材在每块显示器上的调整量独立记忆。",
+        "win.targetDisplay": "目标显示器",
+        "win.library": "壁纸库",
+        "win.addFiles": "添加文件…",
+        "win.setWallpaper": "设为该屏壁纸",
+        "win.removeFromLibrary": "从库移除",
+        "win.stopAll": "停止全部壁纸",
+        "win.pause": "暂停壁纸",
+        "win.resume": "继续壁纸",
+        "win.muteVideo": "静音（仅视频）",
+        "win.launchAtLogin": "登录时自动启动",
+        "win.scaleMode": "缩放模式",
+        "win.zoom": "素材缩放",
+        "win.offsetX": "水平位置",
+        "win.offsetY": "垂直位置",
+        "win.hint": "上面这组调整只作用于「目标显示器 × 壁纸库所选素材」这一组合；换素材或换屏都会各自记住。右侧数值框可直接输入（两位小数）：素材缩放可写「150」或倍率「1.5」，位置为相对屏幕比例，0 = 居中、±1 = 移到边缘。",
+        "win.scope.none": "当前作用范围：无（请先添加素材）",
+        "win.scope.noDisplay": "当前作用范围：未检测到显示器",
+        "win.scope": "当前作用范围：%@  ×  「%@」",
+        "win.libraryEmpty": "（库为空，先添加文件）",
+        "win.status": "共 %d 块显示器，%d 块正在显示壁纸；库中 %d 个素材；自启%@",
+        "win.autoOn": "已开",
+        "win.autoOff": "已关",
+        "win.openPanelTitle": "添加视频或图片",
+        "compat.fixButton": "修复封装标签（hev1 → hvc1）",
+        "compat.hev1": "⚠️ 此视频用 HEV1 封装，macOS 解不了（会黑屏）",
+        "compat.undecodable": "⚠️ macOS 无法解码此视频（编码 %@）",
+        "compat.unknown": "未知",
+        "compat.readFail": "⚠️ 读取文件失败，无法修复",
+        "compat.noTag": "⚠️ 文件中未找到 hev1 标记，无法自动修复",
+        "compat.writeFail": "⚠️ 写入失败：%@",
+        "compat.fixed": "✅ 已改写 %d 处标签（备份 %@），已可正常播放",
+        "compat.summary": "当前：缩放 %.2f%% · 水平 %.2f · 垂直 %.2f",
+        "compat.noSelection": "当前：未选择素材",
+        "fs.paused": "⏸ 全屏中，已暂停：%@",
+        "menu.about": "关于 WallLocus",
+        "menu.hide": "隐藏 WallLocus",
+        "menu.quit": "退出 WallLocus",
+        "menu.open": "打开 WallLocus",
+        "menu.playback": "播放",
+        "menu.displays": "显示器",
+        "menu.scaleMode": "缩放模式",
+        "menu.settings": "设置",
+        "menu.pauseWallpaper": "暂停壁纸",
+        "menu.resumeWallpaper": "继续壁纸",
+        "menu.allDisplays": "全部显示器",
+        "menu.stopAll": "停止全部壁纸",
+        "menu.pauseOnFullscreen": "全屏应用时自动暂停",
+        "menu.pauseOnBattery": "电池供电时暂停",
+        "menu.launchAtLogin": "登录时自动启动",
+        "menu.tooltip": "WallLocus — 视频 / 图片壁纸",
+    ]
+}
