@@ -390,12 +390,21 @@ final class WallpaperManager {
             entry.window.setFrame(screen.frame, display: true)
         }
         entry.view.adjustment = adj
-        // 目标像素尺寸：取屏幕物理像素的一半即可（Retina 下肉眼无损），
-        // 位图内存随面积按平方下降 —— 相比直接用物理像素可省约 75%
+        // 目标像素尺寸 = 屏幕物理像素，但不超过源图分辨率。
+        //
+        // 为什么是物理像素：图层以 point 摆放，Retina 屏 1 point = scale 个物理像素。
+        // 位图若小于物理像素，Core Animation 会放大合成，边缘发虚。
+        // 为什么以源图为上限：放大超过原图没有任何细节增益，只是多占内存。
+        //
+        // 注意「填充」模式下会有额外放大：源图 16:10 放进 16:9 屏时，
+        // 为铺满会再乘 1.1~1.9 倍。这里按源图上限即可，多余部分被裁掉也无损。
         let scale = screen.backingScaleFactor
-        let supersample: CGFloat = 0.5
-        let target = CGSize(width: max(256, screen.frame.width * scale * supersample),
-                            height: max(256, screen.frame.height * scale * supersample))
+        var target = CGSize(width: max(256, screen.frame.width * scale),
+                            height: max(256, screen.frame.height * scale))
+        if let source = Self.sourcePixelSize(path: path) {
+            target.width = min(target.width, source.width)
+            target.height = min(target.height, source.height)
+        }
         entry.view.targetPixelSize = target
         let kind = MediaKind.detect(path)
 
@@ -523,6 +532,19 @@ final class WallpaperManager {
             kCGImageSourceThumbnailMaxPixelSize: maxPixel
         ]
         return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
+    }
+
+    /// 读取源图的原始像素尺寸（图片走 ImageIO）。
+    /// 用于把位图目标尺寸钳制在「不超过原图」的范围内，避免无意义放大。
+    static func sourcePixelSize(path: String) -> CGSize? {
+        let url = URL(fileURLWithPath: path) as CFURL
+        guard let src = CGImageSourceCreateWithURL(url, nil) else { return nil }
+        guard let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        else { return nil }
+        let w = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue ?? 0
+        let h = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue ?? 0
+        guard w > 1, h > 1 else { return nil }
+        return CGSize(width: w, height: h)
     }
 
     /// LRU：只保留最近用到的若干张，超出的立即释放位图
