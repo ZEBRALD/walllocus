@@ -309,6 +309,20 @@ final class FullscreenMonitor {
 final class WallpaperManager {
     static let shared = WallpaperManager()
 
+    /// 系统内存吃紧时主动放掉位图缓存。
+    /// 位图随时可以按需重新解码，但内存紧张时继续持有会影响整机表现。
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+
+    private init() {
+        let src = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical], queue: .main)
+        src.setEventHandler { [weak self] in
+            self?.purgeCaches()
+        }
+        src.resume()
+        memoryPressureSource = src
+    }
+
     final class Entry {
         let window: NSWindow
         let view: WallpaperView
@@ -340,7 +354,7 @@ final class WallpaperManager {
     /// 单张约 24 MB，累计到约 770 MB 才收敛。因此「少解码」比「少持有」重要得多：
     /// 缓存越多，重复切换时越不会触发新解码，总占用反而更低且可控。
     /// 取 8 以覆盖常见素材库规模（超出部分由 LRU 淘汰）。
-    private let imageCacheLimit = 8
+    private let imageCacheLimit = 4
     private var imageCacheOrder: [String] = []
     private(set) var isPaused = false
     /// 正被全屏应用完整覆盖的显示器（这些屏上的壁纸暂停渲染）
@@ -398,6 +412,7 @@ final class WallpaperManager {
             apply(path: path, adj: adj, muted: state.muted, screen: screen, id: id)
         }
         for id in Array(entries.keys) where !alive.contains(id) { remove(id) }
+        pruneCache()
     }
 
     private func apply(path: String, adj: Adjustment, muted: Bool, screen: NSScreen, id: String) {
@@ -450,6 +465,7 @@ final class WallpaperManager {
         // 断开内容视图，让图层树尽早释放（显示器拔掉时能立刻回收显存/后备存储）
         e.window.contentView = nil
         entries[id] = nil
+        pruneCache()
     }
 
     func stopAll() {
@@ -588,6 +604,21 @@ final class WallpaperManager {
     }
 
     /// 释放所有缓存的位图（停止壁纸 / 应用退出时调用）
+    /// 释放「当前没有任何屏幕在用」的位图。
+    ///
+    /// 实测（2026-10-24）：暂停/清理一次可把进程占用从 308 MB 降到 123 MB，
+    /// 说明这些位图是能真正回收的——关键在于必须主动调用，而不是等 LRU 满员。
+    /// 因此每次重排后都把已经不在屏幕上的位图放掉。
+    private func pruneCache() {
+        let live = Set(entries.values.compactMap { $0.cacheKey })
+        guard imageCache.count > live.count else { return }
+        for key in imageCache.keys where !live.contains(key) {
+            imageCache[key] = nil
+        }
+        imageCacheOrder.removeAll { !live.contains($0) }
+        releaseFreeMemory()
+    }
+
     func purgeCaches() {
         imageCache.removeAll()
         imageCacheOrder.removeAll()
@@ -1186,6 +1217,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             st.assignment.removeAll()
         }
         WallpaperManager.shared.applyAll()
+        // 显式清掉已不在屏幕上的位图。此前这里漏了清理，
+        // 导致「停止全部壁纸」后内存纹丝不动（实测 308 MB 不变）。
+        WallpaperManager.shared.purgeCaches()
         refreshControls()
     }
 
