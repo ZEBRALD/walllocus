@@ -314,6 +314,8 @@ final class WallpaperManager {
         let view: WallpaperView
         var player: AVPlayer?
         var path: String?
+        /// 该屏当前引用的位图缓存键；用于在屏移除时精确回收
+        var cacheKey: String?
         init(window: NSWindow, view: WallpaperView) {
             self.window = window
             self.view = view
@@ -323,8 +325,22 @@ final class WallpaperManager {
     private var entries: [String: Entry] = [:]
     private var loopTokens: [String: NSObjectProtocol] = [:]
     /// 图片缓存：按「路径 + 目标像素尺寸」为键，避免不同屏共用一张大图
-    private var imageCache: [String: (CGImage, CGSize)] = [:]
-    private let imageCacheLimit = 4
+    /// 位图缓存。cap = 生成时使用的长边上限（maxPixel），
+    /// 用于判断已有位图是否「至少和这次请求一样清晰」。
+    private struct CachedBitmap {
+        let image: CGImage
+        let size: CGSize
+        let cap: CGFloat
+    }
+    private var imageCache: [String: CachedBitmap] = [:]
+    /// 位图缓存上限。
+    ///
+    /// 实测（2026-10-24）：每解码一张位图，其像素数据会被 Core Graphics
+    /// 长期保留（不随我们的引用释放而回收，malloc_zone_pressure_relief 也无效），
+    /// 单张约 24 MB，累计到约 770 MB 才收敛。因此「少解码」比「少持有」重要得多：
+    /// 缓存越多，重复切换时越不会触发新解码，总占用反而更低且可控。
+    /// 取 8 以覆盖常见素材库规模（超出部分由 LRU 淘汰）。
+    private let imageCacheLimit = 8
     private var imageCacheOrder: [String] = []
     private(set) var isPaused = false
     /// 正被全屏应用完整覆盖的显示器（这些屏上的壁纸暂停渲染）
@@ -431,6 +447,8 @@ final class WallpaperManager {
         guard let e = entries[id] else { return }
         teardownMedia(e, id: id)
         e.window.orderOut(nil)
+        // 断开内容视图，让图层树尽早释放（显示器拔掉时能立刻回收显存/后备存储）
+        e.window.contentView = nil
         entries[id] = nil
     }
 
@@ -444,6 +462,7 @@ final class WallpaperManager {
         entry.view.clearMedia()
         entry.player = nil
         entry.path = nil
+        entry.cacheKey = nil
         if let t = loopTokens[id] {
             NotificationCenter.default.removeObserver(t)
             loopTokens[id] = nil
@@ -502,10 +521,17 @@ final class WallpaperManager {
     }
 
     private func setupImage(_ entry: Entry, path: String, target: CGSize) {
-        let key = "\(path)@\(Int(target.width))x\(Int(target.height))"
-        if let cached = imageCache[key] {
-            entry.view.showImage(cached.0, size: cached.1)
-            touchCache(key)
+        // 键只含路径：同一张图在多块不同尺寸的屏上只保留一份位图。
+        //
+        // 不能用「实际宽高 >= 目标宽高」判断——downsample 约束的是长边（maxPixel），
+        // 竖图放进横屏时生成结果的宽度会明显小于目标宽度，那样会误判成「不够清晰」
+        // 而每次重新解码。改为比较生成时的长边上限 cap：只要已有位图的 cap
+        // 不小于本次所需，清晰度就一定不差于重新生成的结果。
+        let need = max(target.width, target.height)
+        if let cached = imageCache[path], cached.cap + 1 >= need {
+            entry.view.showImage(cached.image, size: cached.size)
+            entry.cacheKey = path
+            touchCache(path)
             return
         }
         guard let cg = Self.downsample(path: path, to: target) else {
@@ -513,8 +539,9 @@ final class WallpaperManager {
             return
         }
         let size = CGSize(width: cg.width, height: cg.height)
-        imageCache[key] = (cg, size)
-        touchCache(key)
+        imageCache[path] = CachedBitmap(image: cg, size: size, cap: need)
+        entry.cacheKey = path
+        touchCache(path)
         entry.view.showImage(cg, size: size)
     }
 
@@ -551,10 +578,13 @@ final class WallpaperManager {
     private func touchCache(_ key: String) {
         imageCacheOrder.removeAll { $0 == key }
         imageCacheOrder.append(key)
+        var evicted = false
         while imageCacheOrder.count > imageCacheLimit {
             let evict = imageCacheOrder.removeFirst()
             imageCache[evict] = nil
+            evicted = true
         }
+        if evicted { releaseFreeMemory() }
     }
 
     /// 释放所有缓存的位图（停止壁纸 / 应用退出时调用）
