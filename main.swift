@@ -111,9 +111,6 @@ final class WallpaperView: NSView {
     private let playerLayer = AVPlayerLayer()
     private let imageLayer = CALayer()
 
-    /// 渲染用目标像素尺寸（屏尺寸 × 2 倍屏），图片按此降采样以省内存
-    var targetPixelSize: CGSize = .zero
-
     /// 素材原始像素尺寸
     var mediaSize: CGSize = .zero { didSet { layoutMedia() } }
     var kind: MediaKind = .video { didSet { layoutMedia() } }
@@ -421,22 +418,22 @@ final class WallpaperManager {
             entry.window.setFrame(screen.frame, display: true)
         }
         entry.view.adjustment = adj
-        // 目标像素尺寸 = 屏幕物理像素，但不超过源图分辨率。
+        // 位图长边 = min(源图长边, 屏幕长边)
         //
-        // 为什么是物理像素：图层以 point 摆放，Retina 屏 1 point = scale 个物理像素。
-        // 位图若小于物理像素，Core Animation 会放大合成，边缘发虚。
-        // 为什么以源图为上限：放大超过原图没有任何细节增益，只是多占内存。
+        // 下界取屏幕长边：图层以 point 摆放，Retina 屏 1 point = scale 个物理像素，
+        // 位图不够大时 Core Animation 会放大合成，边缘发虚。
+        // 上界取源图长边：放大原图没有细节增益，只多占内存。
         //
-        // 注意「填充」模式下会有额外放大：源图 16:10 放进 16:9 屏时，
-        // 为铺满会再乘 1.1~1.9 倍。这里按源图上限即可，多余部分被裁掉也无损。
+        // 必须按「长边」比较，不能宽高各自钳制再取较大者——那会破坏宽高比。
+        // 竖构图源图 2160x2880 放进横屏 2940x1912 时，各自钳制得到 2160x1912，
+        // 长边取 2160，于是源图高度被压到 2160、宽度被压到 1620，反而比原图更糊。
+        // 按长边比较则得到 min(2880, 2940) = 2880，完整保留源图分辨率。
         let scale = screen.backingScaleFactor
-        var target = CGSize(width: max(256, screen.frame.width * scale),
-                            height: max(256, screen.frame.height * scale))
+        let screenLong = max(screen.frame.width, screen.frame.height) * scale
+        var maxPixel = max(256, screenLong)
         if let source = Self.sourcePixelSize(path: path) {
-            target.width = min(target.width, source.width)
-            target.height = min(target.height, source.height)
+            maxPixel = min(maxPixel, max(source.width, source.height))
         }
-        entry.view.targetPixelSize = target
         let kind = MediaKind.detect(path)
 
         if entry.path != path {
@@ -446,7 +443,7 @@ final class WallpaperManager {
             if kind == .video {
                 setupVideo(entry, path: path, muted: muted, id: id)
             } else {
-                setupImage(entry, path: path, target: target)
+                setupImage(entry, path: path, maxPixel: maxPixel)
             }
         } else if kind == .video {
             entry.player?.isMuted = muted
@@ -536,21 +533,21 @@ final class WallpaperManager {
         if shouldPlay(id) { player.play() }
     }
 
-    private func setupImage(_ entry: Entry, path: String, target: CGSize) {
+    private func setupImage(_ entry: Entry, path: String, maxPixel: CGFloat) {
         // 键只含路径：同一张图在多块不同尺寸的屏上只保留一份位图。
         //
         // 不能用「实际宽高 >= 目标宽高」判断——downsample 约束的是长边（maxPixel），
         // 竖图放进横屏时生成结果的宽度会明显小于目标宽度，那样会误判成「不够清晰」
         // 而每次重新解码。改为比较生成时的长边上限 cap：只要已有位图的 cap
         // 不小于本次所需，清晰度就一定不差于重新生成的结果。
-        let need = max(target.width, target.height)
+        let need = maxPixel
         if let cached = imageCache[path], cached.cap + 1 >= need {
             entry.view.showImage(cached.image, size: cached.size)
             entry.cacheKey = path
             touchCache(path)
             return
         }
-        guard let cg = Self.downsample(path: path, to: target) else {
+        guard let cg = Self.downsample(path: path, maxPixel: maxPixel) else {
             entry.view.clearMedia()
             return
         }
@@ -561,12 +558,12 @@ final class WallpaperManager {
         entry.view.showImage(cg, size: size)
     }
 
-    /// 把图片解码并降采样到不超过 target 的尺寸（用 ImageIO 直接出图，跳过 NSImage，
-    /// 内存峰值只占降采样后的位图，不产生原图整幅位图）
-    static func downsample(path: String, to target: CGSize) -> CGImage? {
+    /// 把图片解码到长边不超过 maxPixel 的位图（用 ImageIO 直接出图，跳过 NSImage，
+    /// 内存峰值只占降采样后的位图，不产生原图整幅位图）。
+    /// 传 nil 之外的值时按长边等比缩放，宽高比由 ImageIO 保持。
+    static func downsample(path: String, maxPixel: CGFloat) -> CGImage? {
         let url = URL(fileURLWithPath: path) as CFURL
         guard let src = CGImageSourceCreateWithURL(url, nil) else { return nil }
-        let maxPixel = max(target.width, target.height)
         guard maxPixel > 0 else { return nil }
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
