@@ -693,6 +693,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let thumbnailGrid = ThumbnailGrid(frame: .zero)
     /// 素材名称编辑框（选中后可改名，解决 UUID 文件名认不出的问题）
     private let nameField = NSTextField(string: "")
+    /// 「恢复文件名」按钮：仅在当前素材有别名时可用
+    private let resetNameButton = NSButton(title: "", target: nil, action: nil)
     private var nameFieldRow: NSStackView?
     private let assignButton = NSButton(title: L10n.t("win.setWallpaper"), target: nil, action: nil)
     private let removeButton = NSButton(title: L10n.t("win.removeFromLibrary"), target: nil, action: nil)
@@ -837,7 +839,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         nameField.target = self
         nameField.action = #selector(nameFieldCommitted(_:))
         nameField.delegate = self
-        let nRow = row(L10n.t("win.itemName"), nameField, width: 340)
+        // 名称行 = 输入框 + 「恢复文件名」按钮（有别名时才可用）
+        nameField.translatesAutoresizingMaskIntoConstraints = false
+        nameField.widthAnchor.constraint(equalToConstant: 300).isActive = true
+
+        resetNameButton.title = L10n.t("menu.resetName")
+        resetNameButton.bezelStyle = .rounded
+        resetNameButton.controlSize = .small
+        resetNameButton.target = self
+        resetNameButton.action = #selector(resetNameForSelection)
+        resetNameButton.isEnabled = false
+
+        let nameLabel = NSTextField(labelWithString: L10n.t("win.itemName"))
+        nameLabel.alignment = .right
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        nameLabel.widthAnchor.constraint(equalToConstant: 90).isActive = true
+
+        let nRow = NSStackView(views: [nameLabel, nameField, resetNameButton])
+        nRow.orientation = .horizontal
+        nRow.spacing = 8
+        nRow.alignment = .centerY
         nameFieldRow = nRow
         root.addArrangedSubview(nRow)
 
@@ -847,6 +868,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         thumbnailGrid.onContextMenu = { [weak self] path, view in
             self?.makeCardMenu(path: path, view: view)
+        }
+        thumbnailGrid.onDoubleClick = { [weak self] path in
+            // 双击 = 直接进入重命名
+            guard let self,
+                  let idx = self.state.library.firstIndex(where: { $0.path == path }) else { return }
+            self.libraryPopup.selectItem(at: idx)
+            StateStore.shared.update { st in st.lastSelectedItem = path }
+            self.refreshControls()
+            self.window.makeFirstResponder(self.nameField)
+            self.nameField.selectText(nil)
         }
         thumbnailGrid.translatesAutoresizingMaskIntoConstraints = false
         thumbnailGrid.widthAnchor.constraint(equalToConstant: 555).isActive = true
@@ -874,6 +905,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         scopeLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         scopeLabel.textColor = .labelColor
+        // 文件名可能很长（实测 UUID 命名 40 字符），必须截断，
+        // 否则会把整行撑宽、进而把窗口宽度从 600 拉到 650。
+        scopeLabel.lineBreakMode = .byTruncatingMiddle
+        scopeLabel.cell?.usesSingleLineMode = true
+        scopeLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        scopeLabel.translatesAutoresizingMaskIntoConstraints = false
+        scopeLabel.widthAnchor.constraint(equalToConstant: 555).isActive = true
         root.addArrangedSubview(scopeLabel)
 
         for (i, m) in ScaleMode.allCases.enumerated() {
@@ -1107,6 +1145,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         reloadLibrary()
     }
 
+    /// 恢复当前选中素材的文件名（清除别名）
+    @objc private func resetNameForSelection() {
+        guard let item = selectedItem else { return }
+        StateStore.shared.update { st in
+            guard let i = st.library.firstIndex(where: { $0.path == item.path }) else { return }
+            st.library[i].alias = nil
+        }
+        // 名称框同步清空（此时显示的是文件名占位）
+        nameField.stringValue = ""
+        reloadLibrary()
+    }
+
     /// 卡片右键菜单
     private func makeCardMenu(path: String, view: NSView) -> NSMenu? {
         guard let item = state.library.first(where: { $0.path == path }) else { return nil }
@@ -1138,6 +1188,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         assign.representedObject = path
         menu.addItem(assign)
 
+        let reveal = NSMenuItem(title: L10n.t("menu.reveal"),
+                                action: #selector(revealInFinder(_:)),
+                                keyEquivalent: "")
+        reveal.target = self
+        reveal.representedObject = path
+        menu.addItem(reveal)
+
+        menu.addItem(.separator())
+
         let remove = NSMenuItem(title: L10n.t("win.removeFromLibrary"),
                                 action: #selector(removeFromCard(_:)),
                                 keyEquivalent: "")
@@ -1166,6 +1225,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             st.library[i].alias = nil
         }
         reloadLibrary()
+    }
+
+    @objc private func revealInFinder(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
     @objc private func assignFromCard(_ sender: NSMenuItem) {
@@ -1211,11 +1275,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if window?.firstResponder !== nameField.currentEditor() {
             nameField.stringValue = item.alias ?? ""
         }
+        // 没有别名时「恢复文件名」无意义，置灰
+        resetNameButton.isEnabled = item.hasAlias
         adjustControlsEnabled(true)
         let scopeName = targetDisplayID.isEmpty
             ? L10n.t("common.allDisplaysCount", screens.count)
             : (screens.first { screenID($0) == targetDisplayID }.map { screenTitle($0) } ?? L10n.t("common.unknownDisplay"))
-        scopeLabel.stringValue = L10n.t("win.scope", scopeName, item.name)
+        scopeLabel.stringValue = L10n.t("win.scope", scopeName, item.displayName)
 
         // 展示「第一块目标屏 × 该项目」已存下来的调整量
         guard let anyScreen = targetScreens.first ?? NSScreen.screens.first else {

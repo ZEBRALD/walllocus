@@ -10,6 +10,19 @@ import AppKit
 //  只负责展示与选择，不做任何壁纸应用动作。
 // ============================================================
 
+// MARK: - 卡片容器视图
+
+/// 只有 NSView 能通过 menu(for:) 参与右键菜单；
+/// NSCollectionViewItem 是 NSResponder，不处理鼠标事件，
+/// 所以卡片根视图用这个子类把右键转出去。
+final class CardView: NSView {
+    var onRightClick: (() -> NSMenu?)?
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        onRightClick?()
+    }
+}
+
 // MARK: - 单个卡片
 
 final class ThumbnailItem: NSCollectionViewItem {
@@ -25,13 +38,21 @@ final class ThumbnailItem: NSCollectionViewItem {
     private let inUseDot = NSView()
 
     private(set) var representedPath: String?
+    /// 双击卡片（用于进入重命名）
+    var onDoubleClick: ((String) -> Void)?
+    /// 右键卡片，由外部提供菜单
+    var onContextMenu: ((String, NSView) -> NSMenu?)?
 
     override var isSelected: Bool {
         didSet { updateSelectionRing() }
     }
 
     override func loadView() {
-        let v = NSView()
+        let v = CardView()
+        v.onRightClick = { [weak self] in
+            guard let self, let path = self.representedPath else { return nil }
+            return self.onContextMenu?(path, self.view)
+        }
         v.wantsLayer = true
         v.layer?.cornerRadius = 5
         v.layer?.borderWidth = 2
@@ -91,6 +112,17 @@ final class ThumbnailItem: NSCollectionViewItem {
             inUseDot.widthAnchor.constraint(equalToConstant: 8),
             inUseDot.heightAnchor.constraint(equalToConstant: 8),
         ])
+
+        // 双击进入重命名。单击仍由 collection view 处理选中，
+        // 所以这里只用 doubleClick 手势，不干扰选择。
+        let dbl = NSClickGestureRecognizer(target: self, action: #selector(handleDoubleClick))
+        dbl.numberOfClicksRequired = 2
+        v.addGestureRecognizer(dbl)
+    }
+
+    @objc private func handleDoubleClick() {
+        guard let path = representedPath else { return }
+        onDoubleClick?(path)
     }
 
     private func updateSelectionRing() {
@@ -100,12 +132,25 @@ final class ThumbnailItem: NSCollectionViewItem {
     }
 
     /// 绑定素材。inUse = 是否正被某块屏使用。
-    func configure(path: String, title: String, kind: MediaKind, inUse: Bool) {
+    func configure(path: String, title: String, originalName: String, kind: MediaKind, inUse: Bool) {
         representedPath = path
         nameLabel.stringValue = title
         badge.isHidden = (kind != .video)
         inUseDot.isHidden = !inUse
         updateSelectionRing()
+
+        // 悬停提示：改名后原始文件名在界面上就看不到了，
+        // 这里补回来，方便对照 Finder 里的文件。
+        var tip = title
+        if title != originalName {
+            tip += "\n" + L10n.t("tip.originalFile") + originalName
+        }
+        tip += "\n" + kind.label
+        if inUse { tip += " · " + L10n.t("tip.inUse") }
+        if !FileManager.default.fileExists(atPath: path) {
+            tip += "\n" + L10n.t("tip.missing")
+        }
+        view.toolTip = tip
 
         guard FileManager.default.fileExists(atPath: path) else {
             thumbView.image = Self.placeholder(symbol: "questionmark.square.dashed")
@@ -160,6 +205,8 @@ final class ThumbnailGrid: NSView {
     var onSelect: ((String) -> Void)?
     /// 用户右键卡片（用于重命名菜单）
     var onContextMenu: ((String, NSView) -> NSMenu?)?
+    /// 用户双击卡片（进入重命名）
+    var onDoubleClick: ((String) -> Void)?
 
     /// 每页容量由外部按可用空间设定
     private(set) var columns = 4
@@ -357,8 +404,11 @@ extension ThumbnailGrid: NSCollectionViewDataSource, NSCollectionViewDelegate {
         let entry = pageItems[indexPath.item]
         item.configure(path: entry.path,
                        title: entry.displayName,
+                       originalName: entry.name,
                        kind: entry.kind,
                        inUse: inUsePaths.contains(entry.path))
+        item.onDoubleClick = { [weak self] p in self?.onDoubleClick?(p) }
+        item.onContextMenu = { [weak self] p, v in self?.onContextMenu?(p, v) }
         return item
     }
 
