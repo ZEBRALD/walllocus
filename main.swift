@@ -776,20 +776,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: 界面搭建
 
     private func buildWindow() {
-        // 面板高度按屏幕可用高度决定，网格行数随之变化：
-        // 1080p 可放 4 行，1280x800 的笔记本只放 2 行，避免窗口超出屏幕。
-        let gridCols = 4
-        let availH = (NSScreen.main?.visibleFrame.height ?? 900)
-        let chromeH: CGFloat = 560   // 除网格外的固定控件高度
-        let rowH: CGFloat = ThumbnailItem.cardSize.height + 8
-        let gridRows = max(2, min(4, Int((availH - chromeH - 28) / rowH)))
-        thumbnailGrid.setGrid(columns: gridCols, rows: gridRows)
-        let winH = chromeH + thumbnailGrid.preferredHeight()
+        // ── 自适应尺寸 ──────────────────────────────────────────
+        //
+        // 顺序很重要：先确定「屏幕能给我多少」，再反推网格行数，
+        // 最后让窗口高度恰好等于实际内容高度。不能先定行数再算窗口高，
+        // 那样在矮屏上会算出超出屏幕的窗口（实测 MacBook 内建屏
+        // visibleFrame 仅 924px，而窗口算成了 928px，底部被截掉）。
+        //
+        // chromeH 是「网格之外所有控件 + 间距 + 标题栏」的实测高度，
+        // 改界面布局后需要同步这个数字。
+        let winH = fittedWindowHeight(for: NSScreen.main)
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: winH),
                          styleMask: [.titled, .closable, .miniaturizable],
                          backing: .buffered, defer: false)
         w.title = L10n.t("win.title")
         w.center()
+        // center() 按主屏居中，但窗口可能高于主屏可用高度（实测内建屏仅 924），
+        // 所以再夹一次到可见区域，保证标题栏和底部都在屏内。
+        if let scr = w.screen ?? NSScreen.main {
+            let vis = scr.visibleFrame
+            var f = w.frame
+            if f.height > vis.height { f.size.height = vis.height }
+            if f.maxY > vis.maxY { f.origin.y = vis.maxY - f.height }
+            if f.minY < vis.minY { f.origin.y = vis.minY }
+            w.setFrame(f, display: false)
+        }
         w.isReleasedWhenClosed = false
 
         let root = NSStackView()
@@ -938,6 +949,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window = w
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: 自适应尺寸
+
+    /// 网格之外所有控件的实测高度（标题栏 + 间距 + 固定控件）。
+    /// 改动界面布局时需要同步这个数字，否则窗口会算得太高或太矮。
+    private let chromeHeight: CGFloat = 570
+    private let pagerHeight: CGFloat = 28
+
+    /// 按目标屏幕的可用高度，决定网格行数并返回合适的窗口高度。
+    private func fittedWindowHeight(for screen: NSScreen?) -> CGFloat {
+        let rowH = ThumbnailItem.cardSize.height + 8
+        let screenH = screen?.visibleFrame.height ?? 900
+        // 上下各留 40px，避免贴着菜单栏和 Dock
+        let maxWinH = max(480, screenH - 80)
+        let rowsFit = Int((maxWinH - chromeHeight - pagerHeight) / rowH)
+        let gridRows = max(1, min(4, rowsFit))
+        thumbnailGrid.setGrid(columns: 4, rows: gridRows)
+        return min(maxWinH, chromeHeight + thumbnailGrid.preferredHeight())
+    }
+
+    /// 窗口换屏或被缩放后重新适配：行数可能变化，高度随之调整，
+    /// 并且保证整窗落在该屏的 visibleFrame 内。
+    private func refitToCurrentScreen() {
+        guard let win = window, let scr = win.screen ?? NSScreen.main else { return }
+        let target = fittedWindowHeight(for: scr)
+
+        var f = win.frame
+        // 保持顶边不动，只改高度，视觉上更稳
+        f.origin.y += (f.height - target)
+        f.size.height = target
+
+        // 关键：换屏后坐标系可能完全不同（内建屏 origin.y 就是负数），
+        // 必须把窗口夹回该屏的可见区域，否则底部会被屏幕外截掉。
+        let vis = scr.visibleFrame
+        if f.maxY > vis.maxY { f.origin.y = vis.maxY - f.height }
+        if f.minY < vis.minY { f.origin.y = vis.minY }
+        if f.maxX > vis.maxX { f.origin.x = vis.maxX - f.width }
+        if f.minX < vis.minX { f.origin.x = vis.minX }
+
+        win.setFrame(f, display: true, animate: false)
     }
 
     private func separator() -> NSBox {
@@ -1850,6 +1902,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // MARK: 窗口生命周期
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        // 窗口被拖到另一块屏（可用高度可能差很多）时重新适配
+        refitToCurrentScreen()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        // 换屏不一定触发 windowDidChangeScreen（脚本设 position 就不会），
+        // 所以移动后也检查一次：只在该屏放不下当前窗口时才真正改动，
+        // 否则会把用户手动调好的位置又拽回去。
+        guard let win = window, let scr = win.screen else { return }
+        let vis = scr.visibleFrame
+        var f = win.frame
+        var changed = false
+        if f.height > vis.height { f.size.height = vis.height; changed = true }
+        if f.maxY > vis.maxY { f.origin.y = vis.maxY - f.height; changed = true }
+        if f.minY < vis.minY { f.origin.y = vis.minY; changed = true }
+        if f.maxX > vis.maxX { f.origin.x = vis.maxX - f.width; changed = true }
+        if f.minX < vis.minX { f.origin.x = vis.minX; changed = true }
+        if changed { win.setFrame(f, display: true, animate: false) }
+    }
 
     func windowWillClose(_ notification: Notification) {
         // 关窗后从 Dock 栏消失，只留菜单栏图标常驻（最小化不算关闭）
