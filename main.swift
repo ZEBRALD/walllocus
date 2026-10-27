@@ -974,7 +974,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fullscreenLabel.font = NSFont.systemFont(ofSize: 11)
         root.addArrangedSubview(fullscreenLabel)
 
-        let container = NSView()
+        // 整个面板都是拖放目标：从访达拖图片/视频进来即可添加
+        let container = DropZoneView()
+        container.onDrop = { [weak self] paths in
+            self?.handleDrop(paths)
+        }
         container.addSubview(root)
         NSLayoutConstraint.activate([
             root.topAnchor.constraint(equalTo: container.topAnchor),
@@ -1452,6 +1456,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         refreshControls()
     }
 
+    /// 拖拽放入的处理：加入后给一行明确反馈
+    private func handleDrop(_ paths: [String]) {
+        let added = addPaths(paths)
+        let total = paths.count
+        if added == 0 {
+            // 全是不支持的类型，或全已存在
+            flashStatus(L10n.t("drop.nothingAdded"))
+        } else if added < total {
+            flashStatus(L10n.t("drop.addedPartial", added, total - added))
+        } else {
+            flashStatus(L10n.t("drop.added", added))
+        }
+    }
+
+    /// 在状态栏临时显示一条提示，几秒后恢复常规状态
+    private func flashStatus(_ message: String) {
+        statusLabel.stringValue = message
+        statusLabel.textColor = .controlAccentColor
+        NSObject.cancelPreviousPerformRequests(withTarget: self,
+                                               selector: #selector(restoreStatus),
+                                               object: nil)
+        perform(#selector(restoreStatus), with: nil, afterDelay: 3.0)
+    }
+
+    @objc private func restoreStatus() {
+        statusLabel.textColor = .secondaryLabelColor
+        updateStatus()
+    }
+
     @objc private func addFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -1461,18 +1494,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie,
                                      .image, .png, .jpeg, .heic, .tiff, .gif, .bmp, .webP]
         guard panel.runModal() == .OK else { return }
-        let urls = panel.urls
-        guard !urls.isEmpty else { return }
+        addPaths(panel.urls.map { $0.path })
+    }
 
+    /// 把一组路径加入素材库（面板选择与拖拽共用）。
+    /// 返回实际新增的数量，供调用方做提示。
+    @discardableResult
+    func addPaths(_ paths: [String]) -> Int {
+        guard !paths.isEmpty else { return 0 }
+
+        // 只接受本应用能处理的类型，避免把随便什么文件塞进库里
+        let usable = paths.filter { MediaTypes.isSupported($0) }
+        guard !usable.isEmpty else { return 0 }
+
+        var added = 0
         StateStore.shared.update { st in
-            for url in urls {
-                let path = url.path
-                if !st.library.contains(where: { $0.path == path }) {
-                    st.library.append(LibraryItem(path: path, kind: MediaKind.detect(path)))
-                }
+            for path in usable where !st.library.contains(where: { $0.path == path }) {
+                st.library.append(LibraryItem(path: path, kind: MediaKind.detect(path)))
+                added += 1
             }
             // 目标屏尚未指定壁纸时，自动使用第一个新加入的素材
-            let newPath = urls[0].path
+            guard added > 0 else { return }
+            let newPath = usable[0]
             if targetDisplayID.isEmpty {
                 for s in screens where st.assignment[screenID(s)] == nil {
                     st.assignment[screenID(s)] = newPath
@@ -1481,14 +1524,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 st.assignment[targetDisplayID] = newPath
             }
         }
+
         reloadLibrary()
         // 选中新加入的素材
-        if let idx = state.library.firstIndex(where: { $0.path == urls[0].path }) {
+        if added > 0, let idx = state.library.firstIndex(where: { $0.path == usable[0] }) {
             libraryPopup.selectItem(at: idx)
-            StateStore.shared.update { $0.lastSelectedItem = urls[0].path }
+            StateStore.shared.update { $0.lastSelectedItem = usable[0] }
         }
         WallpaperManager.shared.applyAll()
         refreshControls()
+        return added
     }
 
     @objc private func assignToTarget() {
