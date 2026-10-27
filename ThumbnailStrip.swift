@@ -85,6 +85,17 @@ final class ThumbnailItem: NSCollectionViewItem {
         representedPath = path
         nameLabel.stringValue = name
         badge.isHidden = (kind != .video)
+        updateSelectionRing()
+
+        // 文件在添加后被移动/删除的情况：直接给「缺失」态，不去解码，
+        // 也避免用户对着一张空白卡片猜为什么没反应。
+        guard FileManager.default.fileExists(atPath: path) else {
+            thumbView.image = Self.placeholder(symbol: "questionmark.square.dashed")
+            nameLabel.textColor = .systemRed
+            badge.isHidden = true
+            return
+        }
+        nameLabel.textColor = .secondaryLabelColor
 
         if let cached = ThumbnailStore.shared.cachedImage(for: path) {
             thumbView.image = NSImage(cgImage: cached,
@@ -93,15 +104,12 @@ final class ThumbnailItem: NSCollectionViewItem {
             thumbView.image = nil
         }
 
-        updateSelectionRing()
-
         ThumbnailStore.shared.thumbnail(for: path) { [weak self] image in
             // 关键：异步回来时这张卡片可能已被复用到别的素材上，
             // 路径不匹配就丢弃，否则会串图。
             guard let self, self.representedPath == path else { return }
             guard let image else {
-                self.thumbView.image = NSImage(systemSymbolName: "photo",
-                                               accessibilityDescription: nil)
+                self.thumbView.image = Self.placeholder(symbol: "exclamationmark.triangle")
                 return
             }
             self.thumbView.image = NSImage(cgImage: image,
@@ -109,11 +117,20 @@ final class ThumbnailItem: NSCollectionViewItem {
         }
     }
 
+    /// 占位图标，保持与缩略图相近的观感
+    private static func placeholder(symbol: String) -> NSImage? {
+        let cfg = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
+        return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg)
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         representedPath = nil
         thumbView.image = nil
         nameLabel.stringValue = ""
+        // 缺失态用的是红字，复用前必须复位，否则会把颜色带到下一个素材上
+        nameLabel.textColor = .secondaryLabelColor
         badge.isHidden = true
         isSelected = false
     }

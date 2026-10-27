@@ -1227,6 +1227,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let item = selectedItem else { return }
         // 素材已移除，缩略图缓存一并丢掉
         ThumbnailStore.shared.remove(for: item.path)
+
+        // 先算出删除后该选中谁：优先同位置的下一项，没有就选前一项。
+        // 不处理的话 lastSelectedItem 会指向已删除的路径（实测会悬空），
+        // 下次启动 reloadLibrary 找不到它，下拉框就停在第 0 项。
+        let removedIdx = state.library.firstIndex(where: { $0.path == item.path }) ?? 0
+        var nextSelection: String?
+        if state.library.count > 1 {
+            let fallbackIdx = min(removedIdx, state.library.count - 2)
+            let remaining = state.library.filter { $0.path != item.path }
+            if fallbackIdx < remaining.count {
+                nextSelection = remaining[fallbackIdx].path
+            }
+        }
+
         StateStore.shared.update { st in
             st.library.removeAll { $0.path == item.path }
             for (display, path) in st.assignment where path == item.path {
@@ -1235,6 +1249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             for display in st.adjustments.keys {
                 st.adjustments[display]?.removeValue(forKey: item.path)
             }
+            st.lastSelectedItem = nextSelection
         }
         reloadLibrary()
         WallpaperManager.shared.applyAll()
