@@ -302,8 +302,12 @@ final class ThumbnailGrid: NSView {
 
     /// 设置每页行列数（由外部按可用高度决定）
     func setGrid(columns: Int, rows: Int) {
-        self.columns = max(1, columns)
-        self.rows = max(1, rows)
+        let newCols = max(1, columns)
+        let newRows = max(1, rows)
+        let changed = (newCols != self.columns || newRows != self.rows)
+        self.columns = newCols
+        self.rows = newRows
+
         let layout = NSCollectionViewFlowLayout()
         layout.scrollDirection = .vertical
         layout.itemSize = ThumbnailItem.cardSize
@@ -311,6 +315,20 @@ final class ThumbnailGrid: NSView {
         layout.minimumLineSpacing = 8
         layout.sectionInset = NSEdgeInsets(top: 4, left: 2, bottom: 4, right: 2)
         collection.collectionViewLayout = layout
+
+        // 行列数变了，每页能装的数量就变了，必须重新切片。
+        // 否则 pageItems 还是按旧容量切的（例如原来 1x4 切出 4 项，
+        // 换成 3x4 后仍只显示 4 项），而 pageCount 已按新容量算出 1，
+        // 页码又停在 0，下一页按钮直接失效。实测就是这样。
+        if changed && !allItems.isEmpty {
+            clampPage()
+            refreshPage()
+        }
+    }
+
+    /// 把 page 夹到合法范围内（容量或素材数变化后可能越界）
+    private func clampPage() {
+        page = min(max(0, page), max(0, pageCount - 1))
     }
 
     func reload(_ items: [LibraryItem],
@@ -323,7 +341,7 @@ final class ThumbnailGrid: NSView {
            let idx = items.firstIndex(where: { $0.path == path }) {
             page = min(idx / max(1, pageSize), max(0, pageCount - 1))
         }
-        page = min(page, max(0, pageCount - 1))
+        clampPage()
         refreshPage()
     }
 
@@ -359,6 +377,7 @@ final class ThumbnailGrid: NSView {
     // MARK: 内部分页
 
     private func refreshPage() {
+        clampPage()
         let start = page * pageSize
         let end = min(start + pageSize, allItems.count)
         pageItems = start < end ? Array(allItems[start..<end]) : []
@@ -386,6 +405,11 @@ final class ThumbnailGrid: NSView {
         page += 1
         refreshPage()
     }
+
+    /// 仅用于测试/诊断：当前可见的条目数
+    var visibleCount: Int { pageItems.count }
+    var currentPageIndex: Int { page }
+    var totalPages: Int { pageCount }
 }
 
 // MARK: - 数据源与代理

@@ -988,6 +988,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ])
         w.contentView = container
         w.delegate = self
+        // 记录初始所在屏幕，避免第一次移动被误判成"换屏"
+        if let scr = w.screen {
+            lastFittedScreenNumber = scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int
+        }
         window = w
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -1014,6 +1018,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     /// 窗口换屏或被缩放后重新适配：行数可能变化，高度随之调整，
     /// 并且保证整窗落在该屏的 visibleFrame 内。
+    /// 上次完成适配时窗口所在的屏幕编号，用于判断是否真的换了屏
+    private var lastFittedScreenNumber: Int?
+
     private func refitToCurrentScreen() {
         guard let win = window, let scr = win.screen ?? NSScreen.main else { return }
         let target = fittedWindowHeight(for: scr)
@@ -1032,6 +1039,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if f.minX < vis.minX { f.origin.x = vis.minX }
 
         win.setFrame(f, display: true, animate: false)
+        lastFittedScreenNumber = scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int
     }
 
     private func separator() -> NSBox {
@@ -2021,18 +2029,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func windowDidMove(_ notification: Notification) {
         // 换屏不一定触发 windowDidChangeScreen（脚本设 position 就不会），
-        // 所以移动后也检查一次：只在该屏放不下当前窗口时才真正改动，
-        // 否则会把用户手动调好的位置又拽回去。
+        // 所以移动后自己判断一次。
         guard let win = window, let scr = win.screen else { return }
+        let num = scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int
+
+        // 换了屏：必须重算行数与高度。
+        // 只在"放不下时"才调整是不够的 —— 移到更大的屏幕时窗口放得下，
+        // 于是行数永远停在上一次的值（实测：内建屏 1 行移到 4K 屏仍是 1 行）。
+        if num != lastFittedScreenNumber {
+            refitToCurrentScreen()
+            return
+        }
+
+        // 同一块屏内只是挪动位置：仅在该屏确实放不下时才拉回来，
+        // 否则会把用户手动摆好的位置又拽走。
         let vis = scr.visibleFrame
         var f = win.frame
-        var changed = false
-        if f.height > vis.height { f.size.height = vis.height; changed = true }
-        if f.maxY > vis.maxY { f.origin.y = vis.maxY - f.height; changed = true }
-        if f.minY < vis.minY { f.origin.y = vis.minY; changed = true }
-        if f.maxX > vis.maxX { f.origin.x = vis.maxX - f.width; changed = true }
-        if f.minX < vis.minX { f.origin.x = vis.minX; changed = true }
-        if changed { win.setFrame(f, display: true, animate: false) }
+        if f.maxY > vis.maxY || f.minY < vis.minY || f.maxX > vis.maxX || f.minX < vis.minX {
+            if f.maxY > vis.maxY { f.origin.y = vis.maxY - f.height }
+            if f.minY < vis.minY { f.origin.y = vis.minY }
+            if f.maxX > vis.maxX { f.origin.x = vis.maxX - f.width }
+            if f.minX < vis.minX { f.origin.x = vis.minX }
+            win.setFrame(f, display: true, animate: false)
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
