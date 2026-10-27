@@ -136,6 +136,54 @@ final class ThumbnailItem: NSCollectionViewItem {
     }
 }
 
+// MARK: - 横向滚动视图
+
+/// 普通鼠标只有垂直滚轮，而 NSScrollView 对横向内容不会把垂直滚动转成横向，
+/// 导致「滚轮在图库上滚动没反应」。这里把垂直增量映射到横轴。
+/// 触控板本来就能横向滑动，所以只在纵向为主时才转换，避免干扰原生手势。
+final class HorizontalScrollView: NSScrollView {
+
+    override func scrollWheel(with event: NSEvent) {
+        let dy = event.scrollingDeltaY
+        let dx = event.scrollingDeltaX
+
+        // 横向分量明显更大 → 这是真正的横向滑动（触控板双指左右），交给系统
+        if abs(dx) > abs(dy) {
+            super.scrollWheel(with: event)
+            return
+        }
+        guard dy != 0 else {
+            super.scrollWheel(with: event)
+            return
+        }
+
+        let content = contentView
+        let maxX = max(0, (documentView?.frame.width ?? 0) - content.bounds.width)
+        guard maxX > 0 else {
+            // 内容不比可视区宽，没有可滚的，交回系统（可能滚外层）
+            super.scrollWheel(with: event)
+            return
+        }
+
+        // 换算成横向位移。
+        //
+        // 注意 macOS 会为同一次滚轮先后投递两种事件：行式（precise=0，单位「行」）
+        // 与像素式（precise=1，单位「像素」），二者 delta 量级差很多，不能混用同一系数。
+        let step: CGFloat
+        if event.hasPreciseScrollingDeltas {
+            step = dy
+        } else {
+            // 一格 ≈ 两张卡片，手感接近系统横向列表
+            step = dy * (ThumbnailItem.cardSize.width + 8) * 2
+        }
+
+        var origin = content.bounds.origin
+        origin.x = min(max(0, origin.x + step), maxX)
+        content.scroll(to: origin)
+        reflectScrolledClipView(content)
+    }
+}
+
 // MARK: - 缩略图条容器
 
 final class ThumbnailStrip: NSView {
@@ -143,7 +191,7 @@ final class ThumbnailStrip: NSView {
     /// 用户点击某张缩略图（只上报路径，是否应用由调用方决定）
     var onSelect: ((String) -> Void)?
 
-    private let scroll = NSScrollView()
+    private let scroll = HorizontalScrollView()
     private let collection = NSCollectionView()
     private var items: [LibraryItem] = []
     private var suppressCallback = false
