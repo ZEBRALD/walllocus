@@ -13,6 +13,24 @@ if [ ! -d "$APP" ]; then
   exit 1
 fi
 
+# The README promises Apple silicon and Intel, so a release must carry both
+# slices. ./build.sh defaults to the host architecture, which silently
+# produced an arm64-only DMG once — warn loudly rather than ship it.
+BIN="$APP/Contents/MacOS/WallLocus"
+ARCHS="$(lipo -archs "$BIN" 2>/dev/null || echo unknown)"
+case "$ARCHS" in
+  *x86_64*arm64*|*arm64*x86_64*) ;;
+  *)
+    echo "warning: $BIN is '$ARCHS' only, not universal." >&2
+    echo "         Intel Macs will not be able to run this build." >&2
+    echo "         Build one with:  UNIVERSAL=1 ./build.sh" >&2
+    if [ "${ALLOW_SINGLE_ARCH:-0}" != "1" ]; then
+      echo "         Refusing to package. Set ALLOW_SINGLE_ARCH=1 to override." >&2
+      exit 1
+    fi
+    ;;
+esac
+
 # Staging folder: the app plus a shortcut to /Applications,
 # so the mounted DMG behaves like a standard drag-to-install window.
 STAGE="$(mktemp -d)"
@@ -30,4 +48,5 @@ hdiutil create \
 
 echo "==> Done: $OUT"
 echo "    size: $(du -h "$OUT" | cut -f1)"
+echo "    architectures: $ARCHS"
 echo "    sha256: $(shasum -a 256 "$OUT" | cut -d' ' -f1)"

@@ -33,20 +33,31 @@ Switch displays or wallpapers and the previous framing comes back exactly. Most 
 - **Auto-pause on full screen** — detects when a display is fully covered by a full-screen app (≥96% coverage) and suspends that display only
 - **Auto-pause on battery** (optional)
 - **Menu bar resident** — closing the window releases the Dock icon, the menu bar icon stays
-- **Locked-in low footprint**: AVPlayerLayer hardware decoding for video, ImageIO downsampling for stills
+- **Locked-in low footprint**: AVPlayerLayer hardware decoding for video, ImageIO downsampling for stills; bitmaps are released as soon as no display uses them
 - **Compatibility check** for video: flags files macOS cannot decode and can fix HEV1 → HVC1 tags in place (no re-encode)
+- **Paginated grid library** — 4 columns by 2-4 rows depending on your display, with paging instead of scrolling. A 60-item library is five pages, not thirteen screens of horizontal scroll
+- **See what is in use** — a green dot marks wallpapers currently assigned to a display
+- **Name your wallpapers** — file names are often `4DC7C38D-B69C-4C31-A199-89C88E9474A4.JPG`, so any wallpaper can be given a name that means something. A hover tooltip keeps showing the original file name
+- **Right-click a card** to rename, revert to the file name, set as wallpaper, reveal in Finder, or remove
 - **Bilingual UI** — English and Simplified Chinese, chosen automatically from your system language
 
 ## Measured footprint
 
-On Apple silicon running macOS 26, three displays — two still images, one 4K video:
+On Apple silicon running macOS 26, three displays each showing a 2160x2880 still:
 
 | Metric                               | Value           |
 | ------------------------------------ | --------------- |
-| Physical memory (`footprint`)        | **~96 MB**      |
+| Physical memory (`footprint`)        | **~197 MB**     |
 | CPU, still-image displays            | **0.0 %**       |
 | CPU, 4K video display                | **1.6 – 3.4 %** |
 | CPU, while a full-screen app is open | **0.0 %**       |
+| Library of 60 wallpapers             | **+1.6 MB**     |
+
+Memory is dominated by the decoded bitmaps, so it scales with how many displays you drive and how large your source images are — roughly 24 MB per display for a 2160x2880 source, each held once and released as soon as no display uses it.
+
+A library of 60 wallpapers adds only about 1.6 MB: thumbnails are decoded at 160px on demand, only for the cards actually on screen, and cached under a 16 MB cap. Adding files to the library never decodes anything on its own.
+
+CPU is the part that stays flat at zero.
 
 > Note: `ps` RSS reads much higher (~190 MB) because it counts mapped shared system libraries. Use `footprint -p <pid>` or `vmmap --summary` for real usage.
 
@@ -79,10 +90,14 @@ Because this build is **ad-hoc signed and not notarized**, Gatekeeper will block
 
 ## Usage
 
-1. Click **Add files…** and pick videos and/or images.
+1. Click **Add files…** and pick videos and/or images. Adding files never decodes anything — only wallpapers you actually apply are decoded.
 2. Choose a target under **Target display** — one screen, or all of them at once.
-3. Pick a wallpaper in the library, then press **Set as wallpaper for this display**.
+3. Pick a wallpaper in the grid, then press **Set as wallpaper for this display**. A green dot marks wallpapers already in use somewhere.
 4. Adjust **scale mode / zoom / horizontal / vertical** with the sliders or by typing exact values. Changes apply live and are remembered per display × wallpaper.
+
+The library is a paginated grid: 4 columns, and 2 to 4 rows depending on how much room your display has. The pager hides itself when everything fits on one page.
+
+To give a wallpaper a name that means something (file names are often UUIDs), type one into the **Name** field or right-click its card and choose **Rename…**. **Use file name** puts it back, and the original file name stays visible in the hover tooltip.
 
 Everything is also reachable from the menu bar icon and from the app menu (Playback / Displays / Scale mode / Settings).
 
