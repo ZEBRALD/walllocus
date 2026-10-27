@@ -21,14 +21,68 @@ enum MediaTypes {
     }
 }
 
+/// 自绘虚线边框。
+///
+/// 路径必须由本视图自己维护：如果在父视图的 layout() 里读 borderView.bounds，
+/// 那一刻 Auto Layout 往往还没把尺寸传导下来，bounds 仍是零，路径就成了空——
+/// 表现是模糊和遮罩都正常，唯独看不见边框（实测如此）。
+final class DashedBorderView: NSView {
+
+    override var isFlipped: Bool { true }
+
+    var strokeColor: NSColor = .controlAccentColor {
+        didSet { shape.strokeColor = strokeColor.cgColor }
+    }
+
+    private let shape = CAShapeLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        common()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        common()
+    }
+
+    private func common() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        shape.fillColor = nil
+        shape.lineWidth = 3
+        shape.lineDashPattern = [8, 5]
+        shape.strokeColor = strokeColor.cgColor
+        layer?.addSublayer(shape)
+    }
+
+    override func layout() {
+        super.layout()
+        let r = bounds
+        guard r.width > 2, r.height > 2 else { return }
+        // 关掉隐式动画，否则每次布局虚线都会"游动"一下
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shape.frame = r
+        shape.path = CGPath(roundedRect: r.insetBy(dx: 1.5, dy: 1.5),
+                            cornerWidth: 10, cornerHeight: 10,
+                            transform: nil)
+        CATransaction.commit()
+    }
+}
+
 final class DropZoneView: NSView {
 
     /// 用户松手后回调可用的素材路径
     var onDrop: (([String]) -> Void)?
 
     private let overlay = NSView()
-    /// 虚线边框。CALayer 的 border 画不了虚线，必须用 CAShapeLayer 描路径。
-    private let dashLayer = CAShapeLayer()
+    /// 毛玻璃：把底层素材库糊掉，让上层提示跳出来
+    private let blurView = NSVisualEffectView()
+    /// 半透明压暗层，进一步提升文字对比度
+    private let dimView = NSView()
+    /// 虚线边框（自管理路径）
+    private let borderView = DashedBorderView()
     /// 图标与文字背后的圆角底板，保证在任何壁纸上都看得清
     private weak var textCard: NSStackView?
     private let iconView = NSImageView()
@@ -56,9 +110,7 @@ final class DropZoneView: NSView {
 
         overlay.wantsLayer = true
         overlay.layer?.cornerRadius = 10
-        // 故意不填底色：拖拽时用户仍要能看见下面的素材库。
-        // 醒目度交给虚线边框和中间的文字底板。
-        overlay.layer?.backgroundColor = NSColor.clear.cgColor
+        overlay.layer?.masksToBounds = true
         // 只用 alphaValue 表示显隐：再设 layer.opacity 会变成两套状态，
         // 动画只改其中一个，结果两者不一致（实测整层会实心显示）。
         overlay.alphaValue = 0
@@ -66,34 +118,69 @@ final class DropZoneView: NSView {
         overlay.isHidden = true
         addSubview(overlay)
 
-        dashLayer.fillColor = nil
-        dashLayer.lineWidth = 3
-        dashLayer.lineDashPattern = [8, 5]
-        dashLayer.strokeColor = NSColor.controlAccentColor.cgColor
-        overlay.layer?.addSublayer(dashLayer)
+        // 叠放顺序（由下到上）：模糊 → 压暗 → 虚线框 → 文字。
+        // 先做模糊+压暗，上层提示才有足够对比度；只描一圈虚线时，
+        // 底层素材库的缩略图会把文字淹没。
+
+        // 1) 毛玻璃：.withinWindow 模糊的是同窗口内位于其下方的视图，
+        //    正是我们要模糊的素材库；.behindWindow 会去模糊桌面，不适用。
+        blurView.material = .hudWindow
+        blurView.blendingMode = .withinWindow
+        blurView.state = .active
+        blurView.translatesAutoresizingMaskIntoConstraints = false
+        overlay.addSubview(blurView)
+
+        // 2) 再压一层半透明黑，把底层进一步压下去，提升文字对比度。
+        //    深浅色模式下都是"变暗"，行为一致。
+        dimView.wantsLayer = true
+        dimView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.22).cgColor
+        dimView.translatesAutoresizingMaskIntoConstraints = false
+        overlay.addSubview(dimView)
+
+        // 3) 虚线边框：用独立子视图承载 CAShapeLayer，
+        //    这样它一定叠在 blur/dim 之上（同一父视图按添加顺序排列）。
+        borderView.translatesAutoresizingMaskIntoConstraints = false
+        overlay.addSubview(borderView)
 
         iconView.imageScaling = .scaleProportionallyUpOrDown
         iconView.contentTintColor = .controlAccentColor
         iconView.translatesAutoresizingMaskIntoConstraints = false
 
-        titleLabel.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.font = NSFont.systemFont(ofSize: 17, weight: .semibold)
         titleLabel.alignment = .center
         titleLabel.textColor = .labelColor
 
-        detailLabel.font = NSFont.systemFont(ofSize: 11)
+        detailLabel.font = NSFont.systemFont(ofSize: 12)
         detailLabel.alignment = .center
         detailLabel.textColor = .secondaryLabelColor
 
         let stack = NSStackView(views: [iconView, titleLabel, detailLabel])
         stack.orientation = .vertical
         stack.alignment = .centerX
-        stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 26, bottom: 16, right: 26)
+        stack.spacing = 7
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 30, bottom: 18, right: 30)
         stack.wantsLayer = true
-        stack.layer?.cornerRadius = 12
+        stack.layer?.cornerRadius = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
         overlay.addSubview(stack)
         textCard = stack
+
+        NSLayoutConstraint.activate([
+            blurView.topAnchor.constraint(equalTo: overlay.topAnchor),
+            blurView.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
+            blurView.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
+            blurView.bottomAnchor.constraint(equalTo: overlay.bottomAnchor),
+
+            dimView.topAnchor.constraint(equalTo: overlay.topAnchor),
+            dimView.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
+            dimView.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
+            dimView.bottomAnchor.constraint(equalTo: overlay.bottomAnchor),
+
+            borderView.topAnchor.constraint(equalTo: overlay.topAnchor),
+            borderView.leadingAnchor.constraint(equalTo: overlay.leadingAnchor),
+            borderView.trailingAnchor.constraint(equalTo: overlay.trailingAnchor),
+            borderView.bottomAnchor.constraint(equalTo: overlay.bottomAnchor),
+        ])
 
         NSLayoutConstraint.activate([
             overlay.topAnchor.constraint(equalTo: topAnchor, constant: 6),
@@ -109,16 +196,25 @@ final class DropZoneView: NSView {
         ])
     }
 
-    /// overlay 尺寸由 Auto Layout 决定，虚线路径要跟着更新
+    /// 保证浮层永远排在最上层。
+    ///
+    /// 外部会先创建本视图、再 addSubview(内容)，那样内容会排在浮层之上，
+    /// 把模糊与遮罩整块盖住，只剩边缘虚线露出来。实测就是这样：
+    /// 浮层 alpha=1 却完全看不到变暗效果。所以每次加入子视图后把浮层提到最前。
+    override func addSubview(_ view: NSView) {
+        super.addSubview(view)
+        guard view !== overlay, overlay.superview === self else { return }
+        super.addSubview(overlay, positioned: .above, relativeTo: nil)
+    }
+
+    /// 布局时把浮层重新提到最前，并更新虚线路径
     override func layout() {
         super.layout()
-        let r = overlay.bounds
-        guard r.width > 0, r.height > 0 else { return }
-        dashLayer.frame = r
-        let path = CGPath(roundedRect: r.insetBy(dx: 1.5, dy: 1.5),
-                          cornerWidth: 10, cornerHeight: 10, transform: nil)
-        dashLayer.path = path
+        if overlay.superview === self {
+            super.addSubview(overlay, positioned: .above, relativeTo: nil)
+        }
     }
+
 
     // MARK: 视觉反馈
 
@@ -130,13 +226,17 @@ final class DropZoneView: NSView {
             .withSymbolConfiguration(cfg)
 
         let accent = valid ? NSColor.controlAccentColor : NSColor.systemRed
-        dashLayer.strokeColor = accent.cgColor
+        borderView.strokeColor = accent
         iconView.contentTintColor = accent
-        // 底板用系统窗口底色，深浅色模式都合适
+        // 拒绝时压暗层带一点红，和"可以放"在余光里就能区分开
+        dimView.layer?.backgroundColor = valid
+            ? NSColor.black.withAlphaComponent(0.22).cgColor
+            : NSColor.systemRed.withAlphaComponent(0.20).cgColor
+        // 有了模糊+压暗打底，文字底板可以更轻，避免层层叠加显脏
         textCard?.layer?.backgroundColor = NSColor.windowBackgroundColor
-            .withAlphaComponent(0.96).cgColor
+            .withAlphaComponent(0.72).cgColor
         textCard?.layer?.borderWidth = 1
-        textCard?.layer?.borderColor = accent.withAlphaComponent(0.35).cgColor
+        textCard?.layer?.borderColor = accent.withAlphaComponent(0.45).cgColor
 
         if valid {
             titleLabel.stringValue = L10n.t("drop.title", supportedCount)
