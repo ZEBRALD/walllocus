@@ -620,6 +620,9 @@ final class WallpaperManager {
         imageCache.removeAll()
         imageCacheOrder.removeAll()
         assetCache.removeAll()
+        // 缩略图也是可重建的派生数据，内存吃紧时一并让位。
+        // 下次打开面板会按需重新生成（8 张图约 35ms，代价可接受）。
+        ThumbnailStore.shared.clear()
         releaseFreeMemory()
     }
 
@@ -658,6 +661,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private let targetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let libraryPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let thumbnailStrip = ThumbnailStrip(frame: .zero)
     private let assignButton = NSButton(title: L10n.t("win.setWallpaper"), target: nil, action: nil)
     private let removeButton = NSButton(title: L10n.t("win.removeFromLibrary"), target: nil, action: nil)
     private let modePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -740,7 +744,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: 界面搭建
 
     private func buildWindow() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 560),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 670),
                          styleMask: [.titled, .closable, .miniaturizable],
                          backing: .buffered, defer: false)
         w.title = L10n.t("win.title")
@@ -770,6 +774,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         libraryPopup.target = self
         libraryPopup.action = #selector(librarySelectionChanged)
         root.addArrangedSubview(row(L10n.t("win.library"), libraryPopup, width: 340))
+
+        // 缩略图条：只负责选择，不自动应用壁纸
+        thumbnailStrip.onSelect = { [weak self] path in
+            self?.selectFromStrip(path: path)
+        }
+        thumbnailStrip.translatesAutoresizingMaskIntoConstraints = false
+        thumbnailStrip.widthAnchor.constraint(equalToConstant: 555).isActive = true
+        thumbnailStrip.heightAnchor.constraint(
+            equalToConstant: thumbnailStrip.preferredHeight).isActive = true
+        root.addArrangedSubview(thumbnailStrip)
 
         let addBtn = NSButton(title: L10n.t("win.addFiles"), target: self, action: #selector(addFiles))
         addBtn.bezelStyle = .rounded
@@ -949,6 +963,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                let idx = state.library.firstIndex(where: { $0.path == last }) {
                 libraryPopup.selectItem(at: idx)
             }
+        }
+        // 同步缩略图条（用下拉框当前选中项来高亮）
+        thumbnailStrip.reload(state.library, selectedPath: selectedItem?.path)
+        refreshControls()
+    }
+
+    /// 用户点了缩略图：只更新选择，不应用壁纸
+    private func selectFromStrip(path: String) {
+        guard let idx = state.library.firstIndex(where: { $0.path == path }) else { return }
+        if libraryPopup.indexOfSelectedItem != idx {
+            libraryPopup.selectItem(at: idx)
+        }
+        StateStore.shared.update { st in
+            st.lastSelectedItem = path
         }
         refreshControls()
     }
@@ -1139,6 +1167,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func librarySelectionChanged() {
         if let item = selectedItem {
             StateStore.shared.update { $0.lastSelectedItem = item.path }
+            // 高亮对应缩略图（notify: false 避免回调成环）
+            thumbnailStrip.select(path: item.path, notify: false)
         }
         refreshControls()
     }
@@ -1195,6 +1225,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func removeFromLibrary() {
         guard let item = selectedItem else { return }
+        // 素材已移除，缩略图缓存一并丢掉
+        ThumbnailStore.shared.remove(for: item.path)
         StateStore.shared.update { st in
             st.library.removeAll { $0.path == item.path }
             for (display, path) in st.assignment where path == item.path {

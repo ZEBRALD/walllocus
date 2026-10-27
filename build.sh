@@ -18,7 +18,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Sources shared by the app and (later) the screen saver.
 # Rendering.swift and SharedConfig.swift are AppKit-free so both targets can link them.
 SOURCES=("$DIR/main.swift" "$DIR/L10n.swift" "$DIR/Rendering.swift" \
-         "$DIR/SharedConfig.swift" "$DIR/ThumbnailStore.swift")
+         "$DIR/SharedConfig.swift" "$DIR/ThumbnailStore.swift" "$DIR/ThumbnailStrip.swift")
 
 compile_arch() {
   local arch="$1" out="$2"
