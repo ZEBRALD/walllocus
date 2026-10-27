@@ -40,7 +40,27 @@ enum MediaKind: String, Codable {
 struct LibraryItem: Codable, Equatable {
     var path: String
     var kind: MediaKind
+    /// 用户自定义名称。为空时回退到文件名。
+    /// 文件名常常是 UUID（如 4DC7C38D-B69C-...JPG），对人没有辨识度，
+    /// 所以允许起一个有意义的名字。
+    var alias: String? = nil
+
     var name: String { (path as NSString).lastPathComponent }
+
+    /// 界面上应显示的名字：有别名用别名，否则用文件名
+    var displayName: String {
+        if let a = alias?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty {
+            return a
+        }
+        return name
+    }
+
+    var hasAlias: Bool {
+        if let a = alias?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty {
+            return true
+        }
+        return false
+    }
 }
 
 struct AppState: Codable {
@@ -64,6 +84,15 @@ struct AppState: Codable {
     }
 
     func item(for path: String) -> LibraryItem? { library.first { $0.path == path } }
+
+    /// 某个素材当前被哪些显示器使用（返回显示器 UUID 列表）
+    func displaysUsing(_ path: String) -> [String] {
+        assignment.filter { $0.value == path }.map { $0.key }
+    }
+
+    func isInUse(_ path: String) -> Bool {
+        assignment.values.contains(path)
+    }
 }
 
 final class StateStore {
@@ -661,7 +690,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private let targetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let libraryPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let thumbnailStrip = ThumbnailStrip(frame: .zero)
+    private let thumbnailGrid = ThumbnailGrid(frame: .zero)
+    /// 素材名称编辑框（选中后可改名，解决 UUID 文件名认不出的问题）
+    private let nameField = NSTextField(string: "")
+    private var nameFieldRow: NSStackView?
     private let assignButton = NSButton(title: L10n.t("win.setWallpaper"), target: nil, action: nil)
     private let removeButton = NSButton(title: L10n.t("win.removeFromLibrary"), target: nil, action: nil)
     private let modePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -744,7 +776,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: 界面搭建
 
     private func buildWindow() {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 670),
+        // 面板高度按屏幕可用高度决定，网格行数随之变化：
+        // 1080p 可放 4 行，1280x800 的笔记本只放 2 行，避免窗口超出屏幕。
+        let gridCols = 4
+        let availH = (NSScreen.main?.visibleFrame.height ?? 900)
+        let chromeH: CGFloat = 560   // 除网格外的固定控件高度
+        let rowH: CGFloat = ThumbnailItem.cardSize.height + 8
+        let gridRows = max(2, min(4, Int((availH - chromeH - 28) / rowH)))
+        thumbnailGrid.setGrid(columns: gridCols, rows: gridRows)
+        let winH = chromeH + thumbnailGrid.preferredHeight()
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: winH),
                          styleMask: [.titled, .closable, .miniaturizable],
                          backing: .buffered, defer: false)
         w.title = L10n.t("win.title")
@@ -775,15 +816,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         libraryPopup.action = #selector(librarySelectionChanged)
         root.addArrangedSubview(row(L10n.t("win.library"), libraryPopup, width: 340))
 
-        // 缩略图条：只负责选择，不自动应用壁纸
-        thumbnailStrip.onSelect = { [weak self] path in
-            self?.selectFromStrip(path: path)
+        // 名称行：显示/编辑当前素材的名字
+        nameField.isEditable = true
+        nameField.isSelectable = true
+        nameField.isBordered = true
+        nameField.bezelStyle = .roundedBezel
+        nameField.font = NSFont.systemFont(ofSize: 12)
+        nameField.placeholderString = L10n.t("win.namePlaceholder")
+        nameField.target = self
+        nameField.action = #selector(nameFieldCommitted(_:))
+        nameField.delegate = self
+        let nRow = row(L10n.t("win.itemName"), nameField, width: 340)
+        nameFieldRow = nRow
+        root.addArrangedSubview(nRow)
+
+        // 缩略图网格：只负责选择，不自动应用壁纸
+        thumbnailGrid.onSelect = { [weak self] path in
+            self?.selectFromGrid(path: path)
         }
-        thumbnailStrip.translatesAutoresizingMaskIntoConstraints = false
-        thumbnailStrip.widthAnchor.constraint(equalToConstant: 555).isActive = true
-        thumbnailStrip.heightAnchor.constraint(
-            equalToConstant: thumbnailStrip.preferredHeight).isActive = true
-        root.addArrangedSubview(thumbnailStrip)
+        thumbnailGrid.onContextMenu = { [weak self] path, view in
+            self?.makeCardMenu(path: path, view: view)
+        }
+        thumbnailGrid.translatesAutoresizingMaskIntoConstraints = false
+        thumbnailGrid.widthAnchor.constraint(equalToConstant: 555).isActive = true
+        root.addArrangedSubview(thumbnailGrid)
 
         let addBtn = NSButton(title: L10n.t("win.addFiles"), target: self, action: #selector(addFiles))
         addBtn.bezelStyle = .rounded
@@ -956,7 +1012,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             libraryPopup.isEnabled = true
             for item in state.library {
-                libraryPopup.addItem(withTitle: "\(item.kind.label) · \(item.name)")
+                libraryPopup.addItem(withTitle: "\(item.kind.label) · \(item.displayName)")
             }
             // 启动 / 刷新后恢复上次选中的素材
             if let last = state.lastSelectedItem,
@@ -964,13 +1020,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 libraryPopup.selectItem(at: idx)
             }
         }
-        // 同步缩略图条（用下拉框当前选中项来高亮）
-        thumbnailStrip.reload(state.library, selectedPath: selectedItem?.path)
+        // 同步网格（用下拉框当前选中项来高亮；同时告知哪些在用）
+        let used = Set(state.assignment.values)
+        thumbnailGrid.reload(state.library,
+                             inUse: used,
+                             selectedPath: selectedItem?.path)
         refreshControls()
     }
 
-    /// 用户点了缩略图：只更新选择，不应用壁纸
-    private func selectFromStrip(path: String) {
+    /// 用户点了网格卡片：只更新选择，不应用壁纸
+    private func selectFromGrid(path: String) {
         guard let idx = state.library.firstIndex(where: { $0.path == path }) else { return }
         if libraryPopup.indexOfSelectedItem != idx {
             libraryPopup.selectItem(at: idx)
@@ -978,7 +1037,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         StateStore.shared.update { st in
             st.lastSelectedItem = path
         }
+        thumbnailGrid.select(path: path, notify: false)
         refreshControls()
+    }
+
+    // MARK: 重命名
+
+    /// 名称框提交：写入 alias，然后刷新下拉框与网格
+    @objc private func nameFieldCommitted(_ sender: NSTextField) {
+        guard let item = selectedItem else { return }
+        let trimmed = sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        StateStore.shared.update { st in
+            guard let i = st.library.firstIndex(where: { $0.path == item.path }) else { return }
+            // 与文件名完全相同视为「清除别名」，避免冗余存储
+            st.library[i].alias = (trimmed.isEmpty || trimmed == st.library[i].name) ? nil : trimmed
+        }
+        reloadLibrary()
+    }
+
+    /// 卡片右键菜单
+    private func makeCardMenu(path: String, view: NSView) -> NSMenu? {
+        guard let item = state.library.first(where: { $0.path == path }) else { return nil }
+        let menu = NSMenu()
+
+        let rename = NSMenuItem(title: L10n.t("menu.rename"),
+                                action: #selector(beginRenameFromCard(_:)),
+                                keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = path
+        menu.addItem(rename)
+
+        // 已设过别名才给「恢复文件名」
+        if item.hasAlias {
+            let reset = NSMenuItem(title: L10n.t("menu.resetName"),
+                                   action: #selector(resetNameFromCard(_:)),
+                                   keyEquivalent: "")
+            reset.target = self
+            reset.representedObject = path
+            menu.addItem(reset)
+        }
+
+        menu.addItem(.separator())
+
+        let assign = NSMenuItem(title: L10n.t("win.setWallpaper"),
+                                action: #selector(assignFromCard(_:)),
+                                keyEquivalent: "")
+        assign.target = self
+        assign.representedObject = path
+        menu.addItem(assign)
+
+        let remove = NSMenuItem(title: L10n.t("win.removeFromLibrary"),
+                                action: #selector(removeFromCard(_:)),
+                                keyEquivalent: "")
+        remove.target = self
+        remove.representedObject = path
+        menu.addItem(remove)
+
+        return menu
+    }
+
+    @objc private func beginRenameFromCard(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String,
+              let idx = state.library.firstIndex(where: { $0.path == path }) else { return }
+        libraryPopup.selectItem(at: idx)
+        StateStore.shared.update { st in st.lastSelectedItem = path }
+        refreshControls()
+        // 把焦点送进名称框，直接进入编辑状态
+        window.makeFirstResponder(nameField)
+        nameField.selectText(nil)
+    }
+
+    @objc private func resetNameFromCard(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        StateStore.shared.update { st in
+            guard let i = st.library.firstIndex(where: { $0.path == path }) else { return }
+            st.library[i].alias = nil
+        }
+        reloadLibrary()
+    }
+
+    @objc private func assignFromCard(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        StateStore.shared.update { st in
+            for s in self.targetScreens {
+                st.assignment[screenID(s)] = path
+            }
+        }
+        WallpaperManager.shared.applyAll()
+        reloadLibrary()
+    }
+
+    @objc private func removeFromCard(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String,
+              let idx = state.library.firstIndex(where: { $0.path == path }) else { return }
+        libraryPopup.selectItem(at: idx)
+        StateStore.shared.update { st in st.lastSelectedItem = path }
+        removeFromLibrary()
     }
 
     private var targetScreens: [NSScreen] {
@@ -994,9 +1148,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func refreshControls() {
         guard let item = selectedItem else {
             scopeLabel.stringValue = L10n.t("win.scope.none")
+            nameField.stringValue = ""
+            nameField.isEnabled = false
             adjustControlsEnabled(false)
             updateStatus()
             return
+        }
+        // 名称框跟随选中素材；正在编辑时不要覆盖用户输入
+        nameField.isEnabled = true
+        if window?.firstResponder !== nameField.currentEditor() {
+            nameField.stringValue = item.alias ?? ""
         }
         adjustControlsEnabled(true)
         let scopeName = targetDisplayID.isEmpty
@@ -1168,7 +1329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let item = selectedItem {
             StateStore.shared.update { $0.lastSelectedItem = item.path }
             // 高亮对应缩略图（notify: false 避免回调成环）
-            thumbnailStrip.select(path: item.path, notify: false)
+            thumbnailGrid.select(path: item.path, notify: false)
         }
         refreshControls()
     }

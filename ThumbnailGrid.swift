@@ -1,13 +1,16 @@
 import AppKit
 
 // ============================================================
-//  ThumbnailStrip — 壁纸库横向缩略图条
+//  ThumbnailGrid — 壁纸库网格（分页）
 //
-//  只负责「展示 + 选择」，不做任何壁纸应用动作。
-//  点击缩略图 → onSelect(path)，由控制器决定后续行为。
+//  布局：N 列 × M 行，每页固定容量，底部「上一页 / 页码 / 下一页」。
+//  为什么分页而不是滚动：图库大时一维横滚要翻十几屏，网格+分页能
+//  把「我在哪、总共多少」讲清楚，且不需要自定义滚轮映射。
+//
+//  只负责展示与选择，不做任何壁纸应用动作。
 // ============================================================
 
-// MARK: - 单个缩略图卡片
+// MARK: - 单个卡片
 
 final class ThumbnailItem: NSCollectionViewItem {
 
@@ -18,8 +21,9 @@ final class ThumbnailItem: NSCollectionViewItem {
     private let thumbView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let badge = NSImageView()
+    /// 「正在使用」角标：左上角小圆点
+    private let inUseDot = NSView()
 
-    /// 当前卡片承载的素材路径。异步缩略图回来时用它判断是否已被复用。
     private(set) var representedPath: String?
 
     override var isSelected: Bool {
@@ -49,13 +53,23 @@ final class ThumbnailItem: NSCollectionViewItem {
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(nameLabel)
 
-        // 视频角标：白色播放符号压在右下角
+        // 视频角标
         badge.image = NSImage(systemSymbolName: "play.circle.fill",
                               accessibilityDescription: nil)
         badge.contentTintColor = NSColor(white: 1, alpha: 0.92)
         badge.isHidden = true
         badge.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(badge)
+
+        // 「正在使用」圆点：绿色小圆，位于缩略图左上角
+        inUseDot.wantsLayer = true
+        inUseDot.layer?.backgroundColor = NSColor.systemGreen.cgColor
+        inUseDot.layer?.cornerRadius = 4
+        inUseDot.layer?.borderWidth = 1.5
+        inUseDot.layer?.borderColor = NSColor(white: 1, alpha: 0.85).cgColor
+        inUseDot.isHidden = true
+        inUseDot.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(inUseDot)
 
         NSLayoutConstraint.activate([
             thumbView.topAnchor.constraint(equalTo: v.topAnchor, constant: 2),
@@ -71,6 +85,11 @@ final class ThumbnailItem: NSCollectionViewItem {
             badge.bottomAnchor.constraint(equalTo: thumbView.bottomAnchor, constant: -4),
             badge.widthAnchor.constraint(equalToConstant: 16),
             badge.heightAnchor.constraint(equalToConstant: 16),
+
+            inUseDot.leadingAnchor.constraint(equalTo: thumbView.leadingAnchor, constant: 5),
+            inUseDot.topAnchor.constraint(equalTo: thumbView.topAnchor, constant: 5),
+            inUseDot.widthAnchor.constraint(equalToConstant: 8),
+            inUseDot.heightAnchor.constraint(equalToConstant: 8),
         ])
     }
 
@@ -80,15 +99,14 @@ final class ThumbnailItem: NSCollectionViewItem {
             : NSColor.clear.cgColor
     }
 
-    /// 绑定一个素材。先填已缓存的图（避免闪烁），再异步取。
-    func configure(path: String, name: String, kind: MediaKind) {
+    /// 绑定素材。inUse = 是否正被某块屏使用。
+    func configure(path: String, title: String, kind: MediaKind, inUse: Bool) {
         representedPath = path
-        nameLabel.stringValue = name
+        nameLabel.stringValue = title
         badge.isHidden = (kind != .video)
+        inUseDot.isHidden = !inUse
         updateSelectionRing()
 
-        // 文件在添加后被移动/删除的情况：直接给「缺失」态，不去解码，
-        // 也避免用户对着一张空白卡片猜为什么没反应。
         guard FileManager.default.fileExists(atPath: path) else {
             thumbView.image = Self.placeholder(symbol: "questionmark.square.dashed")
             nameLabel.textColor = .systemRed
@@ -105,8 +123,7 @@ final class ThumbnailItem: NSCollectionViewItem {
         }
 
         ThumbnailStore.shared.thumbnail(for: path) { [weak self] image in
-            // 关键：异步回来时这张卡片可能已被复用到别的素材上，
-            // 路径不匹配就丢弃，否则会串图。
+            // 异步回来时卡片可能已被复用到别的素材上，路径不匹配就丢弃
             guard let self, self.representedPath == path else { return }
             guard let image else {
                 self.thumbView.image = Self.placeholder(symbol: "exclamationmark.triangle")
@@ -117,7 +134,6 @@ final class ThumbnailItem: NSCollectionViewItem {
         }
     }
 
-    /// 占位图标，保持与缩略图相近的观感
     private static func placeholder(symbol: String) -> NSImage? {
         let cfg = NSImage.SymbolConfiguration(pointSize: 22, weight: .regular)
         return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
@@ -129,71 +145,37 @@ final class ThumbnailItem: NSCollectionViewItem {
         representedPath = nil
         thumbView.image = nil
         nameLabel.stringValue = ""
-        // 缺失态用的是红字，复用前必须复位，否则会把颜色带到下一个素材上
         nameLabel.textColor = .secondaryLabelColor
         badge.isHidden = true
+        inUseDot.isHidden = true
         isSelected = false
     }
 }
 
-// MARK: - 横向滚动视图
+// MARK: - 网格容器
 
-/// 普通鼠标只有垂直滚轮，而 NSScrollView 对横向内容不会把垂直滚动转成横向，
-/// 导致「滚轮在图库上滚动没反应」。这里把垂直增量映射到横轴。
-/// 触控板本来就能横向滑动，所以只在纵向为主时才转换，避免干扰原生手势。
-final class HorizontalScrollView: NSScrollView {
+final class ThumbnailGrid: NSView {
 
-    override func scrollWheel(with event: NSEvent) {
-        let dy = event.scrollingDeltaY
-        let dx = event.scrollingDeltaX
-
-        // 横向分量明显更大 → 这是真正的横向滑动（触控板双指左右），交给系统
-        if abs(dx) > abs(dy) {
-            super.scrollWheel(with: event)
-            return
-        }
-        guard dy != 0 else {
-            super.scrollWheel(with: event)
-            return
-        }
-
-        let content = contentView
-        let maxX = max(0, (documentView?.frame.width ?? 0) - content.bounds.width)
-        guard maxX > 0 else {
-            // 内容不比可视区宽，没有可滚的，交回系统（可能滚外层）
-            super.scrollWheel(with: event)
-            return
-        }
-
-        // 换算成横向位移。
-        //
-        // 注意 macOS 会为同一次滚轮先后投递两种事件：行式（precise=0，单位「行」）
-        // 与像素式（precise=1，单位「像素」），二者 delta 量级差很多，不能混用同一系数。
-        let step: CGFloat
-        if event.hasPreciseScrollingDeltas {
-            step = dy
-        } else {
-            // 一格 ≈ 两张卡片，手感接近系统横向列表
-            step = dy * (ThumbnailItem.cardSize.width + 8) * 2
-        }
-
-        var origin = content.bounds.origin
-        origin.x = min(max(0, origin.x + step), maxX)
-        content.scroll(to: origin)
-        reflectScrolledClipView(content)
-    }
-}
-
-// MARK: - 缩略图条容器
-
-final class ThumbnailStrip: NSView {
-
-    /// 用户点击某张缩略图（只上报路径，是否应用由调用方决定）
+    /// 用户点击某个卡片（只上报路径，是否应用由调用方决定）
     var onSelect: ((String) -> Void)?
+    /// 用户右键卡片（用于重命名菜单）
+    var onContextMenu: ((String, NSView) -> NSMenu?)?
 
-    private let scroll = HorizontalScrollView()
+    /// 每页容量由外部按可用空间设定
+    private(set) var columns = 4
+    private(set) var rows = 3
+    private var page = 0
+
+    private var allItems: [LibraryItem] = []
+    private var inUsePaths: Set<String> = []
+    private var pageItems: [LibraryItem] = []
+
+    private let scroll = NSScrollView()
     private let collection = NSCollectionView()
-    private var items: [LibraryItem] = []
+    private let pager = NSStackView()
+    private let prevButton = NSButton(title: "‹", target: nil, action: nil)
+    private let nextButton = NSButton(title: "›", target: nil, action: nil)
+    private let pageLabel = NSTextField(labelWithString: "")
     private var suppressCallback = false
 
     override init(frame: NSRect) {
@@ -208,11 +190,11 @@ final class ThumbnailStrip: NSView {
 
     private func setup() {
         let layout = NSCollectionViewFlowLayout()
-        layout.scrollDirection = .horizontal
+        layout.scrollDirection = .vertical
         layout.itemSize = ThumbnailItem.cardSize
         layout.minimumInteritemSpacing = 8
         layout.minimumLineSpacing = 8
-        layout.sectionInset = NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
+        layout.sectionInset = NSEdgeInsets(top: 4, left: 2, bottom: 4, right: 2)
 
         collection.collectionViewLayout = layout
         collection.register(ThumbnailItem.self,
@@ -225,37 +207,82 @@ final class ThumbnailStrip: NSView {
         collection.translatesAutoresizingMaskIntoConstraints = false
 
         scroll.documentView = collection
-        scroll.hasHorizontalScroller = true
         scroll.hasVerticalScroller = false
-        scroll.autohidesScrollers = true
+        scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
-        scroll.horizontalScrollElasticity = .allowed
         scroll.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scroll)
+
+        // 分页条
+        prevButton.bezelStyle = .rounded
+        prevButton.controlSize = .small
+        prevButton.target = self
+        prevButton.action = #selector(goPrev)
+        nextButton.bezelStyle = .rounded
+        nextButton.controlSize = .small
+        nextButton.target = self
+        nextButton.action = #selector(goNext)
+        pageLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        pageLabel.textColor = .secondaryLabelColor
+        pageLabel.alignment = .center
+
+        pager.orientation = .horizontal
+        pager.spacing = 8
+        pager.alignment = .centerY
+        pager.translatesAutoresizingMaskIntoConstraints = false
+        pager.addArrangedSubview(prevButton)
+        pager.addArrangedSubview(pageLabel)
+        pager.addArrangedSubview(nextButton)
+        addSubview(pager)
 
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            pager.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
+            pager.centerXAnchor.constraint(equalTo: centerXAnchor),
+            pager.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             collection.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             collection.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            collection.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
             collection.bottomAnchor.constraint(equalTo: scroll.contentView.bottomAnchor),
         ])
     }
 
     // MARK: 对外接口
 
-    func reload(_ newItems: [LibraryItem], selectedPath: String?) {
-        items = newItems
-        collection.reloadData()
-        select(path: selectedPath, notify: false)
+    /// 设置每页行列数（由外部按可用高度决定）
+    func setGrid(columns: Int, rows: Int) {
+        self.columns = max(1, columns)
+        self.rows = max(1, rows)
+        let layout = NSCollectionViewFlowLayout()
+        layout.scrollDirection = .vertical
+        layout.itemSize = ThumbnailItem.cardSize
+        layout.minimumInteritemSpacing = 8
+        layout.minimumLineSpacing = 8
+        layout.sectionInset = NSEdgeInsets(top: 4, left: 2, bottom: 4, right: 2)
+        collection.collectionViewLayout = layout
     }
 
-    /// 选中某个路径。notify = false 用于「由外部同步过来」的场景，避免回调成环。
+    func reload(_ items: [LibraryItem],
+                inUse: Set<String>,
+                selectedPath: String?) {
+        allItems = items
+        inUsePaths = inUse
+        // 让当前选中项所在页成为可见页，避免「选中了但看不到」
+        if let path = selectedPath,
+           let idx = items.firstIndex(where: { $0.path == path }) {
+            page = min(idx / max(1, pageSize), max(0, pageCount - 1))
+        }
+        page = min(page, max(0, pageCount - 1))
+        refreshPage()
+    }
+
     func select(path: String?, notify: Bool = false) {
-        guard let path, let idx = items.firstIndex(where: { $0.path == path }) else {
+        guard let path,
+              let idx = pageItems.firstIndex(where: { $0.path == path }) else {
             suppressCallback = true
             collection.deselectAll(nil)
             suppressCallback = false
@@ -263,41 +290,82 @@ final class ThumbnailStrip: NSView {
         }
         let set = Set([IndexPath(item: idx, section: 0)])
         suppressCallback = true
-        // 必须先 deselectAll：selectItems 是「追加选择」语义，
-        // 不清旧选择会导致多张卡片同时高亮（实测选中数会累加到 2+）。
         collection.deselectAll(nil)
-        collection.selectItems(at: set, scrollPosition: .nearestHorizontalEdge)
+        collection.selectItems(at: set, scrollPosition: [])
         suppressCallback = false
-        if notify {
-            onSelect?(path)
-        }
+        if notify { onSelect?(path) }
     }
 
-    var preferredHeight: CGFloat { ThumbnailItem.cardSize.height + 16 }
+    var pageSize: Int { columns * rows }
+
+    var pageCount: Int {
+        guard pageSize > 0, !allItems.isEmpty else { return 1 }
+        return (allItems.count + pageSize - 1) / pageSize
+    }
+
+    /// 高度由行数决定：每行 92 + 间距 8，加边距与分页条
+    func preferredHeight() -> CGFloat {
+        let rowsH = CGFloat(rows) * (ThumbnailItem.cardSize.height + 8) + 8
+        return rowsH + 28   // 分页条高度
+    }
+
+    // MARK: 内部分页
+
+    private func refreshPage() {
+        let start = page * pageSize
+        let end = min(start + pageSize, allItems.count)
+        pageItems = start < end ? Array(allItems[start..<end]) : []
+        collection.reloadData()
+        updatePager()
+    }
+
+    private func updatePager() {
+        let total = pageCount
+        pageLabel.stringValue = "\(page + 1) / \(total)   (\(allItems.count) 项)"
+        prevButton.isEnabled = page > 0
+        nextButton.isEnabled = page < total - 1
+        // 只有一页时把整条分页器隐藏，避免占地方
+        pager.isHidden = (total <= 1)
+    }
+
+    @objc private func goPrev() {
+        guard page > 0 else { return }
+        page -= 1
+        refreshPage()
+    }
+
+    @objc private func goNext() {
+        guard page < pageCount - 1 else { return }
+        page += 1
+        refreshPage()
+    }
 }
 
 // MARK: - 数据源与代理
 
-extension ThumbnailStrip: NSCollectionViewDataSource, NSCollectionViewDelegate {
+extension ThumbnailGrid: NSCollectionViewDataSource, NSCollectionViewDelegate {
 
     func collectionView(_ cv: NSCollectionView,
                         numberOfItemsInSection section: Int) -> Int {
-        items.count
+        pageItems.count
     }
 
     func collectionView(_ cv: NSCollectionView,
                         itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
         let item = cv.makeItem(withIdentifier: ThumbnailItem.identifier,
                                for: indexPath) as! ThumbnailItem
-        let entry = items[indexPath.item]
-        item.configure(path: entry.path, name: entry.name, kind: entry.kind)
+        let entry = pageItems[indexPath.item]
+        item.configure(path: entry.path,
+                       title: entry.displayName,
+                       kind: entry.kind,
+                       inUse: inUsePaths.contains(entry.path))
         return item
     }
 
     func collectionView(_ cv: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
         guard !suppressCallback,
               let idx = indexPaths.first?.item,
-              idx < items.count else { return }
-        onSelect?(items[idx].path)
+              idx < pageItems.count else { return }
+        onSelect?(pageItems[idx].path)
     }
 }
