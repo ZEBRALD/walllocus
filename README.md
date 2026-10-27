@@ -38,6 +38,7 @@ Switch displays or wallpapers and the previous framing comes back exactly. Most 
 - **Paginated grid library** — 4 columns by 2-4 rows depending on your display, with paging instead of scrolling. A 60-item library is five pages, not thirteen screens of horizontal scroll
 - **See what is in use** — a green dot marks wallpapers currently assigned to a display
 - **Name your wallpapers** — file names are often `4DC7C38D-B69C-4C31-A199-89C88E9474A4.JPG`, so any wallpaper can be given a name that means something. A hover tooltip keeps showing the original file name
+- **Drag files in from Finder** — drop images or videos anywhere on the panel. It blurs and dims behind the hint, so you can read the count while still seeing where you are dropping
 - **Right-click a card** to rename, revert to the file name, set as wallpaper, reveal in Finder, or remove
 - **Bilingual UI** — English and Simplified Chinese, chosen automatically from your system language
 
@@ -90,12 +91,14 @@ Because this build is **ad-hoc signed and not notarized**, Gatekeeper will block
 
 ## Usage
 
-1. Click **Add files…** and pick videos and/or images. Adding files never decodes anything — only wallpapers you actually apply are decoded.
+1. Add wallpapers either with **Add files…** or by dragging images and videos from Finder onto the panel, anywhere. Adding files never decodes anything — only wallpapers you actually apply are decoded.
 2. Choose a target under **Target display** — one screen, or all of them at once.
 3. Pick a wallpaper in the grid, then press **Set as wallpaper for this display**. A green dot marks wallpapers already in use somewhere.
 4. Adjust **scale mode / zoom / horizontal / vertical** with the sliders or by typing exact values. Changes apply live and are remembered per display × wallpaper.
 
-The library is a paginated grid: 4 columns, and 2 to 4 rows depending on how much room your display has. The pager hides itself when everything fits on one page.
+The library is a paginated grid: 4 columns, and 2 to 4 rows depending on how much room your display has. The pager hides itself when everything fits on one page. Both the row count and the paging follow the panel between displays, so a laptop screen shows 2 rows and a 4K display shows 3 or 4.
+
+While a drag is over the panel, everything underneath blurs and dims and a dashed border appears, with a count of what will be added. Unsupported files are called out rather than silently dropped.
 
 To give a wallpaper a name that means something (file names are often UUIDs), type one into the **Name** field or right-click its card and choose **Rename…**. **Use file name** puts it back, and the original file name stays visible in the hover tooltip.
 
