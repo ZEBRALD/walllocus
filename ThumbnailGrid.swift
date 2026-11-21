@@ -28,12 +28,16 @@ final class CardView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         // 单击：在 mouseDown 就提交选中，求即时反馈。
-        // 注意只在 clickCount == 1 时选中；第二次按下（clickCount == 2）
-        // 不能再次触发选中，否则会把「双击」拆成两次单击。
+        // 只在 clickCount == 1 时选中；第二次按下不能再次触发，
+        // 否则「双击」会被拆成两次单击。
         if event.clickCount == 1 {
             onSingleClick?()
         }
-        super.mouseDown(with: event)
+        // 刻意不调 super.mouseDown：
+        // NSCollectionViewItem 的默认实现会在按下时把焦点交给视图链上最近的
+        // 可编辑控件（右栏的名称框 / 数值框 / 顶栏搜索框），
+        // 表现为「只是点了一下界面，输入框就进入了编辑态」。
+        // 选中与双击我们都自己处理了，不需要它转发。
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -41,7 +45,7 @@ final class CardView: NSView {
         if event.clickCount == 2 {
             onDoubleClick?()
         }
-        super.mouseUp(with: event)
+        // 同样不转发，避免 super 再次改焦点
     }
 }
 

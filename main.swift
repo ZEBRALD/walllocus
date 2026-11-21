@@ -1013,8 +1013,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self?.relayoutGridColumns()
         }
 
+        // 搜索框是窗口里第一个可聚焦控件，AppKit 会把它设为
+        // initialFirstResponder，导致一启动它就处于编辑态；
+        // 用户点界面任何地方都像在触碰输入框（反馈的「太容易触发」）。
+        w.initialFirstResponder = nil
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        // 必须等窗口真正成为 key window 之后再交还焦点：
+        // 在 makeKeyAndOrderFront 之前/当行调用 makeFirstResponder(nil) 无效，
+        // 那一刻窗口还不是 key，AppKit 随后仍会把焦点派给搜索框。
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let win = self.window else { return }
+            if win.firstResponder is NSTextView {
+                win.makeFirstResponder(nil)
+            }
+        }
     }
 
     /// 给某块区域铺上毛玻璃，用透明度区分层次。
