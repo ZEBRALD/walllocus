@@ -28,7 +28,8 @@ final class CardView: NSView {
 final class ThumbnailItem: NSCollectionViewItem {
 
     static let identifier = NSUserInterfaceItemIdentifier("ThumbnailItem")
-    static let cardSize = NSSize(width: 112, height: 92)
+    /// 卡片基准尺寸。实际渲染会按中栏可用宽度等比调整（见 ThumbnailGrid.applyCardScale）。
+    static var cardSize = NSSize(width: 112, height: 92)
     private static let thumbHeight: CGFloat = 70
 
     private let thumbView = NSImageView()
@@ -302,6 +303,29 @@ final class ThumbnailGrid: NSView {
     // MARK: 对外接口
 
     /// 设置每页行列数（由外部按可用高度决定）
+    /// 按「可用宽度 / 列数」反推卡片宽度，让网格铺满可用空间。
+    /// Flow layout 虽会把多余宽度摊到列间距，但卡片本身不会变宽，
+    /// 结果是右边永远留一条空隙、缩略图也偏小。这里直接改 itemSize 让卡片长到该有的尺寸。
+    func applyCardWidth(availableWidth: CGFloat, columns: Int) {
+        guard columns > 0, availableWidth > 0 else { return }
+        let inset: CGFloat = 4          // sectionInset 左右各 2
+        let spacing: CGFloat = 8
+        let usable = availableWidth - inset - spacing * CGFloat(columns - 1)
+        let w = floor(usable / CGFloat(columns))
+        // 限制在合理区间，避免窗口极小/极大时卡片变形
+        let clamped = max(96, min(220, w))
+        let ratio = clamped / ThumbnailItem.cardSize.width
+        let newSize = NSSize(width: clamped,
+                             height: round(ThumbnailItem.cardSize.height * ratio))
+        guard abs(newSize.width - ThumbnailItem.cardSize.width) > 0.5 else { return }
+        ThumbnailItem.cardSize = newSize
+        if let layout = collection.collectionViewLayout as? NSCollectionViewFlowLayout {
+            layout.itemSize = newSize
+            collection.collectionViewLayout = layout
+            collection.collectionViewLayout?.invalidateLayout()
+        }
+    }
+
     func setGrid(columns: Int, rows: Int) {
         let newCols = max(1, columns)
         let newRows = max(1, rows)

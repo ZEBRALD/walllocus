@@ -772,6 +772,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var searchQuery: String = ""
     /// 当前网格列数（随窗口宽度变化）
     private var gridColumns: Int = 5
+    /// 当前网格行数（随窗口高度变化）
+    private var gridRows: Int = 3
     /// 预设：下拉选择 + 保存/加载/删除
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let savePresetButton = NSButton(title: "", target: nil, action: nil)
@@ -1380,12 +1382,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 按窗口宽度算网格列数（卡片 112 + 间距 8）
     private func relayoutGridColumns() {
         guard let win = window else { return }
-        // 中栏宽 = 总宽 - 左 200 - 两条分隔线 2 - 右 300 - 中栏左右内边距 20
+
+        // 行列都按中栏实际可用空间算，不再写死行数。
+        // 之前固定 3 行：中栏高 541 只用了 300pt，窗口放大后也只增列不增行，
+        // 一半高度白白空着（用户反馈「一页只有 4x3，UI 变大了还能放更多」）。
         let middleWidth = win.frame.width - 200 - 2 - 300 - 20
-        let cols = max(2, min(8, Int((middleWidth + 8) / 120)))
-        guard cols != gridColumns else { return }
+        let middleHeight = win.frame.height - 56 - 30 - 40   // 顶栏 + 底栏 + 上下内边距
+
+        // NSCollectionViewFlowLayout 会把行内多余宽度平摊到列间距，
+        // 所以这里按「最小占宽 = 卡片 112 + 间距 8」估算能放几列，
+        // 实际渲染时卡片会被均匀撑开、铺满中栏。
+        // 垂直方向同理：卡片 92 + 间距 8，另留 28 给分页条。
+        let minCellW: CGFloat = 112 + 8
+        let minCellH: CGFloat = 92 + 8
+        let cols = max(3, min(10, Int((middleWidth + 8) / minCellW) + 0))
+
+        // 让卡片按可用宽度长到该有的尺寸，铺满中栏（原来右侧总留一条空隙）。
+        // 扣掉滚动条宽度，否则最后一列会被它压住。
+        let usableW = middleWidth - 20
+        thumbnailGrid.applyCardWidth(availableWidth: usableW, columns: cols)
+
+        // 卡片高度会跟着宽度等比变，这里重算行数。
+        // 必须留足余量：分页条实际占 28pt、scroll 上下还有 4pt inset，
+        // 之前 +8 的宽松估算让第 5 行被分页条压住（实测截图中最后一行被裁）。
+        let cellH = ThumbnailItem.cardSize.height + 8
+        let rows = max(2, min(6, Int(floor((middleHeight - 40) / cellH))))
+
+        guard cols != gridColumns || rows != gridRows else { return }
         gridColumns = cols
-        thumbnailGrid.setGrid(columns: cols, rows: 3)
+        gridRows = rows
+        thumbnailGrid.setGrid(columns: cols, rows: rows)
     }
 
     @objc private func searchChanged() {
