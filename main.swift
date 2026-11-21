@@ -287,6 +287,20 @@ enum Settings {
         set { d.set(newValue, forKey: "pauseOnBattery") }
     }
 
+    /// 每页显示多少个素材。行列会按窗口比例自动排布，这个值只决定「一页放几个」。
+    /// 可选档位见 L10n 的 setting.pageSize.* 文案。
+    static var pageSize: Int {
+        get {
+            let v = d.integer(forKey: "pageSize")
+            // 没设置过或越界时回到默认 25
+            return (10...100).contains(v) ? v : 25
+        }
+        set { d.set(newValue, forKey: "pageSize") }
+    }
+
+    /// 备选档位
+    static let pageSizeOptions = [15, 20, 25, 30, 40, 50]
+
     // 关窗后隐藏 Dock 图标：固定行为，不提供开关
 }
 
@@ -1398,7 +1412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 目标卡片宽度：约 132pt 时观感最好（默认 1100 宽窗口下是 4 列）
         let targetCardW: CGFloat = 132
         let cols = max(2, min(8, Int(round(middleWidth / targetCardW))))
-        let rows = Int(ceil(Double(ThumbnailGrid.pageCapacity) / Double(cols)))
+        let rows = Int(ceil(Double(Settings.pageSize) / Double(cols)))
 
         // 卡片尺寸按可用宽度均分（让 FlowLayout 正好排下 cols 个，不会挤进更多）
         thumbnailGrid.applyCardSize(availableWidth: middleWidth - 24,
@@ -1433,29 +1447,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
     }
 
+    /// 设置菜单。按功能分组成二级子菜单，避免一长串平铺项。
     @objc private func showSettingsMenu() {
         let menu = NSMenu()
 
-        let auto = NSMenuItem(title: L10n.t("menu.launchAtLogin"),
-                              action: #selector(toggleAutoStart),
-                              keyEquivalent: "")
-        auto.target = self
-        auto.state = isAutoStartEnabled() ? .on : .off
-        menu.addItem(auto)
+        // ── 播放 ──────────────────────────────────────────
+        let playback = NSMenuItem(title: L10n.t("menu.playback"), action: nil, keyEquivalent: "")
+        let playbackSub = NSMenu()
 
         let fs = NSMenuItem(title: L10n.t("menu.pauseOnFullscreen"),
                             action: #selector(toggleFullscreenPause),
                             keyEquivalent: "")
         fs.target = self
         fs.state = Settings.pauseOnFullscreen ? .on : .off
-        menu.addItem(fs)
+        playbackSub.addItem(fs)
 
         let bat = NSMenuItem(title: L10n.t("menu.pauseOnBattery"),
                              action: #selector(togglePauseOnBattery),
                              keyEquivalent: "")
         bat.target = self
         bat.state = Settings.pauseOnBattery ? .on : .off
-        menu.addItem(bat)
+        playbackSub.addItem(bat)
+
+        playback.submenu = playbackSub
+        menu.addItem(playback)
+
+        // ── 壁纸库 ────────────────────────────────────────
+        let library = NSMenuItem(title: L10n.t("setting.library"), action: nil, keyEquivalent: "")
+        let librarySub = NSMenu()
+
+        let perPage = NSMenuItem(title: L10n.t("setting.pageSize"), action: nil, keyEquivalent: "")
+        let perPageSub = NSMenu()
+        var matchedPreset = false
+        for n in Settings.pageSizeOptions {
+            let item = NSMenuItem(title: L10n.t("setting.pageSize.value", n),
+                                  action: #selector(changePageSize(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = n
+            let on = (Settings.pageSize == n)
+            item.state = on ? .on : .off
+            if on { matchedPreset = true }
+            perPageSub.addItem(item)
+        }
+
+        // 档位之外再给个自由输入。当前值不在预设档位里时，
+        // 「自定义…」右侧直接显示实际数字，免得看不出现在是几个。
+        perPageSub.addItem(.separator())
+        let customTitle = matchedPreset
+            ? L10n.t("setting.pageSize.custom")
+            : L10n.t("setting.pageSize.customValue", Settings.pageSize)
+        let custom = NSMenuItem(title: customTitle,
+                                action: #selector(promptPageSize),
+                                keyEquivalent: "")
+        custom.target = self
+        custom.state = matchedPreset ? .off : .on
+        perPageSub.addItem(custom)
+
+        perPage.submenu = perPageSub
+        librarySub.addItem(perPage)
+
+        library.submenu = librarySub
+        menu.addItem(library)
+
+        // ── 启动 ──────────────────────────────────────────
+        let auto = NSMenuItem(title: L10n.t("menu.launchAtLogin"),
+                              action: #selector(toggleAutoStart),
+                              keyEquivalent: "")
+        auto.target = self
+        auto.state = isAutoStartEnabled() ? .on : .off
+        menu.addItem(auto)
 
         menu.addItem(.separator())
         let reveal = NSMenuItem(title: L10n.t("menu.openAppFolder"),
@@ -1467,6 +1528,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         menu.popUp(positioning: nil,
                    at: NSPoint(x: 0, y: settingsButton.bounds.height + 4),
                    in: settingsButton)
+    }
+
+    /// 弹出输入框让用户自填每页数量。
+    @objc private func promptPageSize() {
+        let alert = NSAlert()
+        alert.messageText = L10n.t("setting.pageSize.promptTitle")
+        alert.informativeText = L10n.t("setting.pageSize.promptBody")
+        alert.addButton(withTitle: L10n.t("common.save"))
+        alert.addButton(withTitle: L10n.t("common.cancel"))
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
+        field.stringValue = String(Settings.pageSize)
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard let n = Int(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            flashStatus(L10n.t("setting.pageSize.invalid"))
+            return
+        }
+        // 夹到合理范围，避免填 0 或几万导致布局异常
+        let clamped = max(1, min(200, n))
+        if clamped != n {
+            flashStatus(L10n.t("setting.pageSize.clamped", clamped))
+        }
+        Settings.pageSize = clamped
+        applyPageSizeChange()
+    }
+
+    /// 改完每页数量后立即重排并刷新，让改动能当场看到。
+    private func applyPageSizeChange() {
+        gridColumns = -1          // 强制重算
+        relayoutGridColumns()
+        reloadLibrary()
+    }
+
+    @objc private func changePageSize(_ sender: NSMenuItem) {
+        guard let n = sender.representedObject as? Int else { return }
+        Settings.pageSize = n
+        applyPageSizeChange()
     }
 
     @objc private func revealAppInFinder() {

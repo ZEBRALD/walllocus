@@ -425,9 +425,8 @@ final class ThumbnailGrid: NSView {
         if notify { onSelect?(path) }
     }
 
-    /// 每页固定 25 个（与行列数解绑：窗口窄时行数会更多，靠滚动查看）
-    static let pageCapacity = 25
-    var pageSize: Int { Self.pageCapacity }
+    /// 每页数量取自设置（默认 25）。与行列数解绑：窗口窄时行数更多，靠滚动查看。
+    var pageSize: Int { Settings.pageSize }
 
     var pageCount: Int {
         guard pageSize > 0, !allItems.isEmpty else { return 1 }
