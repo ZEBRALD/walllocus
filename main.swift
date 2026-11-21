@@ -763,6 +763,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var libraryEmptyLabel: NSTextField?
     /// 右栏顶部的当前素材大图预览
     private let previewPane = PreviewPane(frame: .zero)
+    private var detailScroll: NSScrollView?
+    private var detailDoc: NSView?
+    private var detailRoot: NSStackView?
     /// 侧栏当前选中项；nil 表示还没选
     private var sidebarSelection: SidebarSelection = .allDisplays
     /// 搜索过滤词（空 = 不过滤）
@@ -911,7 +914,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         bottomBar.edgeInsets = NSEdgeInsets(top: 5, left: 14, bottom: 5, right: 14)
         bottomBar.translatesAutoresizingMaskIntoConstraints = false
         bottomBar.wantsLayer = true
-        bottomBar.layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.05).cgColor
+        // 不透明背景：原来的 5% 半透明会让壁纸透上来，底栏文字糊在一起。
+        bottomBar.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
 
         let bottomSep = NSBox()
         bottomSep.boxType = .separator
@@ -1249,11 +1253,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         warningRow = wRow
         root.addArrangedSubview(wRow)
 
-        pane.addSubview(root)
+        // 右栏内容（预览 + 名称 + 构图 + 操作）超过可视高度时按钮会被裁掉，
+        // 必须能滚动。用最标准的 NSScrollView + NSClipView 写法。
+        // 右栏内容超过可视高度时按钮会被裁掉，需要滚动。
+        // 这里刻意不用 Auto Layout 排 doc：root 的子控件本身带固定宽度（270），
+        // 与 doc↔contentView 的宽度约束互相冲突，会把内容压成 0 宽（实测整栏空白）。
+        // 改用传统方式：scroll 走约束，doc 与 root 的 frame 在 layout 时手算。
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        // 跟随系统偏好：overlay 样式 + 自动隐藏 =
+        // 滚动时浮现、停手 1 秒多后淡出，和 macOS 其它 App 一致。
+        // 之前强制常显（.legacy + autohidesScrollers=false）又丑又挡内容。
+        scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+
+        let doc = FlippedView(frame: NSRect(x: 0, y: 0, width: 300, height: 700))
+        doc.autoresizingMask = []
+        root.translatesAutoresizingMaskIntoConstraints = true
+        doc.addSubview(root)
+        scroll.documentView = doc
+        self.detailScroll = scroll
+        self.detailDoc = doc
+        self.detailRoot = root
+        pane.addSubview(scroll)
+
         NSLayoutConstraint.activate([
-            root.topAnchor.constraint(equalTo: pane.topAnchor),
-            root.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
-            root.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: pane.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
         ])
         return pane
     }
@@ -1697,6 +1728,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         return state.library[idx]
     }
 
+    /// 把 doc 与 root 的 frame 按实际内容高度设置。
+    /// NSScrollView 只在 documentView.frame 高于可视区时才产生可滚区域。
+    private func syncDetailDocSize() {
+        guard let scroll = detailScroll, let doc = detailDoc, let root = detailRoot else { return }
+        let w = scroll.contentView.bounds.width
+        guard w > 0 else { return }
+        // 先按宽度排版，取到内容应有的高度
+        root.frame = NSRect(x: 0, y: 0, width: w, height: root.frame.height)
+        root.layoutSubtreeIfNeeded()
+        let h = max(root.fittingSize.height, scroll.contentView.bounds.height)
+        root.frame = NSRect(x: 0, y: 0, width: w, height: h)
+        doc.frame = NSRect(x: 0, y: 0, width: w, height: h)
+
+        // 强制 doc 保持这个 frame（Auto Layout 可能把它改回可视高度）
+        doc.setFrameSize(NSSize(width: w, height: h))
+    }
+
     private func refreshControls() {
         loadPresetButton.isHidden = true
         loadPresetButton.isEnabled = false
@@ -1772,6 +1820,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         updateValueLabels()
         updateStatus()
         checkCompatibility(item)
+        syncDetailDocSize()
     }
 
     private func applyButtEnabled(_ item: LibraryItem) {
@@ -2806,3 +2855,9 @@ let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.regular)
 app.run()
+
+/// 原点在左上的容器：NSScrollView 里装普通 NSView 时原点在左下，
+/// 滚动方向会反直觉，换 flipped 才能像网页一样从顶部开始往下滚。
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
