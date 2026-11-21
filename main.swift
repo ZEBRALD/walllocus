@@ -1245,7 +1245,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 10
-        root.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        // 右侧留 0：滚动条叠在 clip view 上，若 root 还有 16pt 右内边距，
+        // 滚动条会被推到离 pane 边缘 18pt 处（实测），与中栏的 3pt 明显不一致。
+        // 改成 0 后滚动条贴到与中栏相同的位置，文字与滚动条之间的呼吸由内容自身留白提供。
+        root.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 0)
         root.translatesAutoresizingMaskIntoConstraints = false
 
         // 显示器信息
