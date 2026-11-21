@@ -1458,49 +1458,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     // MARK: 自适应尺寸
 
 
-    /// 网格之外所有控件的实测高度（标题栏 + 间距 + 固定控件）。
-    /// 改动界面布局时需要同步这个数字，否则窗口会算得太高或太矮。
-    private let chromeHeight: CGFloat = 570
-    private let pagerHeight: CGFloat = 28
-
-    /// 按目标屏幕的可用高度，决定网格行数并返回合适的窗口高度。
-    private func fittedWindowHeight(for screen: NSScreen?) -> CGFloat {
-        let rowH = ThumbnailItem.cardSize.height + 8
-        let screenH = screen?.visibleFrame.height ?? 900
-        // 上下各留 40px，避免贴着菜单栏和 Dock
-        let maxWinH = max(480, screenH - 80)
-        let rowsFit = Int((maxWinH - chromeHeight - pagerHeight) / rowH)
-        let gridRows = max(1, min(4, rowsFit))
-        thumbnailGrid.setGrid(columns: 4, rows: gridRows)
-        return min(maxWinH, chromeHeight + thumbnailGrid.preferredHeight())
-    }
-
-    /// 窗口换屏或被缩放后重新适配：行数可能变化，高度随之调整，
-    /// 并且保证整窗落在该屏的 visibleFrame 内。
-    /// 上次完成适配时窗口所在的屏幕编号，用于判断是否真的换了屏
-    private var lastFittedScreenNumber: Int?
-
-    private func refitToCurrentScreen() {
-        guard let win = window, let scr = win.screen ?? NSScreen.main else { return }
-        let target = fittedWindowHeight(for: scr)
-
-        var f = win.frame
-        // 保持顶边不动，只改高度，视觉上更稳
-        f.origin.y += (f.height - target)
-        f.size.height = target
-
-        // 关键：换屏后坐标系可能完全不同（内建屏 origin.y 就是负数），
-        // 必须把窗口夹回该屏的可见区域，否则底部会被屏幕外截掉。
-        let vis = scr.visibleFrame
-        if f.maxY > vis.maxY { f.origin.y = vis.maxY - f.height }
-        if f.minY < vis.minY { f.origin.y = vis.minY }
-        if f.maxX > vis.maxX { f.origin.x = vis.maxX - f.width }
-        if f.minX < vis.minX { f.origin.x = vis.minX }
-
-        win.setFrame(f, display: true, animate: false)
-        lastFittedScreenNumber = scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int
-    }
-
     private func separator(width: CGFloat = 555) -> NSBox {
         let b = NSBox()
         b.boxType = .separator
@@ -2764,35 +2721,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     // MARK: 窗口生命周期
 
     func windowDidChangeScreen(_ notification: Notification) {
-        // 窗口被拖到另一块屏（可用高度可能差很多）时重新适配
-        refitToCurrentScreen()
+        // 三栏布局窗口是可自由缩放的，换屏不应该改它的尺寸或位置：
+        // 用户把它摆到哪里就是哪里。只需要让网格列数跟着新宽度走。
+        relayoutGridColumns()
     }
 
     func windowDidMove(_ notification: Notification) {
-        // 换屏不一定触发 windowDidChangeScreen（脚本设 position 就不会），
-        // 所以移动后自己判断一次。
-        guard let win = window, let scr = win.screen else { return }
-        let num = scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int
-
-        // 换了屏：必须重算行数与高度。
-        // 只在"放不下时"才调整是不够的 —— 移到更大的屏幕时窗口放得下，
-        // 于是行数永远停在上一次的值（实测：内建屏 1 行移到 4K 屏仍是 1 行）。
-        if num != lastFittedScreenNumber {
-            refitToCurrentScreen()
-            return
-        }
-
-        // 同一块屏内只是挪动位置：仅在该屏确实放不下时才拉回来，
-        // 否则会把用户手动摆好的位置又拽走。
-        let vis = scr.visibleFrame
-        var f = win.frame
-        if f.maxY > vis.maxY || f.minY < vis.minY || f.maxX > vis.maxX || f.minX < vis.minX {
-            if f.maxY > vis.maxY { f.origin.y = vis.maxY - f.height }
-            if f.minY < vis.minY { f.origin.y = vis.minY }
-            if f.maxX > vis.maxX { f.origin.x = vis.maxX - f.width }
-            if f.minX < vis.minX { f.origin.x = vis.minX }
-            win.setFrame(f, display: true, animate: false)
-        }
+        // 刻意什么都不做。
+        //
+        // 旧实现会在这里把窗口夹回该屏的 visibleFrame，导致两个问题：
+        // ①窗口拖不到 Dock 下面（visibleFrame 已经把 Dock 扣掉了）；
+        // ②换屏时还会被强制改高度，表现为「UI 自己往上跳」。
+        // 新布局是可自由缩放的固定尺寸窗口，位置与大小完全交给用户。
     }
 
     func windowWillClose(_ notification: Notification) {
