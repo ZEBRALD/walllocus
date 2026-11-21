@@ -333,9 +333,15 @@ final class ThumbnailGrid: NSView {
 
     func reload(_ items: [LibraryItem],
                 inUse: Set<String>,
-                selectedPath: String?) {
+                selectedPath: String?,
+                resetPage: Bool = false) {
+        let contentChanged = (items.count != allItems.count)
+            || (items.map { $0.path } != allItems.map { $0.path })
         allItems = items
         inUsePaths = inUse
+        // 素材集合变了（搜索过滤、增删）就回到第 1 页，
+        // 否则会停在一个已经不存在的页码上（实测出现过只剩 6 项却显示 2/2）。
+        if resetPage || contentChanged { page = 0 }
         // 让当前选中项所在页成为可见页，避免「选中了但看不到」
         if let path = selectedPath,
            let idx = items.firstIndex(where: { $0.path == path }) {

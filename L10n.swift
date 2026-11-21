@@ -24,6 +24,20 @@ enum L10n {
     }
 
     private static let en: [String: String] = [
+        "nav.presets": "Presets",
+        "nav.displays": "Displays",
+        "nav.allDisplays": "All displays (sync)",
+        "nav.displayCount": "%d display(s)",
+        "top.searchPlaceholder": "Search wallpapers and presets",
+        "top.settings": "Settings",
+        "detail.framing": "Framing",
+        "detail.actions": "Actions",
+        "detail.using": "Using: %@",
+        "detail.notUsing": "No wallpaper assigned",
+        "detail.presetSummary": "Preset x %d display(s)",
+        "library.emptyHint": "Drag images or videos here, or use Add files",
+        "preset.saveCurrent": "Save current as preset",
+        "menu.openAppFolder": "Show WallLocus in Finder",
         "mode.fill": "Fill (crop edges)",
         "mode.fit": "Fit (letterbox)",
         "mode.stretch": "Stretch",
@@ -129,6 +143,18 @@ enum L10n {
     ]
 
     private static let zh: [String: String] = [
+        "nav.presets": "预设",
+        "nav.displays": "显示器",
+        "nav.allDisplays": "全部显示器（同步）",
+        "nav.displayCount": "%d 块屏",
+        "top.searchPlaceholder": "搜索壁纸与预设",
+        "top.settings": "设置",
+        "detail.framing": "构图",
+        "detail.actions": "操作",
+        "detail.presetSummary": "预设 · %d 块屏",
+        "library.emptyHint": "把图片或视频拖到这里，或点「添加文件…」",
+        "preset.saveCurrent": "保存当前为预设",
+        "menu.openAppFolder": "在访达中显示 WallLocus",
         "mode.fill": "填充（裁剪边缘）",
         "mode.fit": "适应（留黑边）",
         "mode.stretch": "拉伸铺满",

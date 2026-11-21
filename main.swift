@@ -737,7 +737,7 @@ final class WallpaperManager {
 
 // MARK: - 控制面板
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSearchFieldDelegate {
 
     var window: NSWindow!
     private var screens: [NSScreen] = []
@@ -752,6 +752,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let resetNameButton = NSButton(title: "", target: nil, action: nil)
     /// 「停止全部壁纸」/「还原壁纸」—— 同一个按钮，按状态切换标题与行为
     private let stopButton = NSButton(title: "", target: nil, action: nil)
+
+    // 三栏布局新增
+    private let sidebar = SidebarNavigator(frame: .zero)
+    private let searchField = NSSearchField(frame: .zero)
+    private let settingsButton = NSButton(title: "", target: nil, action: nil)
+    private let addButton = NSButton(title: "", target: nil, action: nil)
+    private let paneTitle = NSTextField(labelWithString: "")
+    private let paneSubtitle = NSTextField(labelWithString: "")
+    private var libraryEmptyLabel: NSTextField?
+    /// 侧栏当前选中项；nil 表示还没选
+    private var sidebarSelection: SidebarSelection = .allDisplays
+    /// 搜索过滤词（空 = 不过滤）
+    private var searchQuery: String = ""
+    /// 当前网格列数（随窗口宽度变化）
+    private var gridColumns: Int = 5
     /// 预设：下拉选择 + 保存/加载/删除
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let savePresetButton = NSButton(title: "", target: nil, action: nil)
@@ -840,100 +855,209 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: 界面搭建
 
+    /// 三栏布局：左导航 / 中图库 / 右详情，顶栏与底栏贯穿。
+    ///
+    /// 为什么放弃单列堆叠：原来 20 多个控件挤在 555px 宽的一列里，
+    /// 「选屏」「浏览素材」「调参数」三种操作互相干扰，滑块也几乎没有空间。
     private func buildWindow() {
-        // ── 自适应尺寸 ──────────────────────────────────────────
-        //
-        // 顺序很重要：先确定「屏幕能给我多少」，再反推网格行数，
-        // 最后让窗口高度恰好等于实际内容高度。不能先定行数再算窗口高，
-        // 那样在矮屏上会算出超出屏幕的窗口（实测 MacBook 内建屏
-        // visibleFrame 仅 924px，而窗口算成了 928px，底部被截掉）。
-        //
-        // chromeH 是「网格之外所有控件 + 间距 + 标题栏」的实测高度，
-        // 改界面布局后需要同步这个数字。
-        let winH = fittedWindowHeight(for: NSScreen.main)
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: winH),
-                         styleMask: [.titled, .closable, .miniaturizable],
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
+                         styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
         w.title = L10n.t("win.title")
+        w.minSize = NSSize(width: 900, height: 600)
         w.center()
-        // center() 按主屏居中，但窗口可能高于主屏可用高度（实测内建屏仅 924），
-        // 所以再夹一次到可见区域，保证标题栏和底部都在屏内。
-        if let scr = w.screen ?? NSScreen.main {
-            let vis = scr.visibleFrame
-            var f = w.frame
-            if f.height > vis.height { f.size.height = vis.height }
-            if f.maxY > vis.maxY { f.origin.y = vis.maxY - f.height }
-            if f.minY < vis.minY { f.origin.y = vis.minY }
-            w.setFrame(f, display: false)
-        }
         w.isReleasedWhenClosed = false
 
-        let root = NSStackView()
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 9
-        root.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
-        root.translatesAutoresizingMaskIntoConstraints = false
-
-        let title = NSTextField(labelWithString: "WallLocus")
-        title.font = NSFont.systemFont(ofSize: 17, weight: .semibold)
-        root.addArrangedSubview(title)
-        let sub = NSTextField(labelWithString: L10n.t("win.subtitle"))
-        sub.textColor = .secondaryLabelColor
-        root.addArrangedSubview(sub)
-
-        root.addArrangedSubview(separator())
-
-        targetPopup.target = self
-        targetPopup.action = #selector(targetChanged)
-        root.addArrangedSubview(row(L10n.t("win.targetDisplay"), targetPopup, width: 340))
-
-        libraryPopup.target = self
-        libraryPopup.action = #selector(librarySelectionChanged)
-        root.addArrangedSubview(row(L10n.t("win.library"), libraryPopup, width: 340))
-
-        // 名称行：显示/编辑当前素材的名字
-        nameField.isEditable = true
-        nameField.isSelectable = true
-        nameField.isBordered = true
-        nameField.bezelStyle = .roundedBezel
-        nameField.font = NSFont.systemFont(ofSize: 12)
-        nameField.placeholderString = L10n.t("win.namePlaceholder")
-        nameField.target = self
-        nameField.action = #selector(nameFieldCommitted(_:))
-        nameField.delegate = self
-        // 名称行 = 输入框 + 「恢复文件名」按钮（有别名时才可用）
-        nameField.translatesAutoresizingMaskIntoConstraints = false
-        nameField.widthAnchor.constraint(equalToConstant: 300).isActive = true
-
-        resetNameButton.title = L10n.t("menu.resetName")
-        resetNameButton.bezelStyle = .rounded
-        resetNameButton.controlSize = .small
-        resetNameButton.target = self
-        resetNameButton.action = #selector(resetNameForSelection)
-        resetNameButton.isEnabled = false
-
-        let nameLabel = NSTextField(labelWithString: L10n.t("win.itemName"))
-        nameLabel.alignment = .right
-        nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.widthAnchor.constraint(equalToConstant: 90).isActive = true
-
-        let nRow = NSStackView(views: [nameLabel, nameField, resetNameButton])
-        nRow.orientation = .horizontal
-        nRow.spacing = 8
-        nRow.alignment = .centerY
-        nameFieldRow = nRow
-        root.addArrangedSubview(nRow)
-
-        // 缩略图网格：只负责选择，不自动应用壁纸
-        thumbnailGrid.onSelect = { [weak self] path in
-            self?.selectFromGrid(path: path)
+        // 整个面板都是拖放目标
+        let container = DropZoneView()
+        container.onDrop = { [weak self] paths in
+            self?.handleDrop(paths)
         }
+
+        // ── 顶栏 ──────────────────────────────────────────────
+        let topBar = buildTopBar()
+
+        // ── 三栏 ──────────────────────────────────────────────
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.onSelect = { [weak self] sel in self?.sidebarSelectionChanged(sel) }
+        sidebar.onSavePreset = { [weak self] in self?.savePreset() }
+        sidebar.onPresetMenu = { [weak self] id, view in
+            self?.makePresetMenu(id: id, view: view)
+        }
+
+        let middle = buildLibraryPane()
+        let right = buildDetailPane()
+
+        // 竖分隔线
+        let div1 = NSBox()
+        div1.boxType = .separator
+        div1.translatesAutoresizingMaskIntoConstraints = false
+        let div2 = NSBox()
+        div2.boxType = .separator
+        div2.translatesAutoresizingMaskIntoConstraints = false
+
+        // ── 底栏 ──────────────────────────────────────────────
+        statusLabel.font = NSFont.systemFont(ofSize: 11)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        fullscreenLabel.font = NSFont.systemFont(ofSize: 11)
+        fullscreenLabel.textColor = .systemOrange
+        let bottomBar = NSStackView(views: [statusLabel, NSView(), fullscreenLabel])
+        bottomBar.orientation = .horizontal
+        bottomBar.spacing = 10
+        bottomBar.edgeInsets = NSEdgeInsets(top: 5, left: 14, bottom: 5, right: 14)
+        bottomBar.translatesAutoresizingMaskIntoConstraints = false
+        bottomBar.wantsLayer = true
+        bottomBar.layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.05).cgColor
+
+        let bottomSep = NSBox()
+        bottomSep.boxType = .separator
+        bottomSep.translatesAutoresizingMaskIntoConstraints = false
+
+        for v in [topBar, sidebar, div1, middle, div2, right, bottomSep, bottomBar] {
+            container.addSubview(v)
+        }
+
+        NSLayoutConstraint.activate([
+            // 顶栏
+            topBar.topAnchor.constraint(equalTo: container.topAnchor),
+            topBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            topBar.heightAnchor.constraint(equalToConstant: 56),
+
+            // 左栏：固定 200
+            sidebar.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            sidebar.widthAnchor.constraint(equalToConstant: 200),
+            sidebar.bottomAnchor.constraint(equalTo: bottomSep.topAnchor),
+
+            div1.topAnchor.constraint(equalTo: sidebar.topAnchor),
+            div1.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            div1.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+            div1.widthAnchor.constraint(equalToConstant: 1),
+
+            // 中栏：弹性
+            middle.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            middle.leadingAnchor.constraint(equalTo: div1.trailingAnchor),
+            middle.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+            middle.widthAnchor.constraint(greaterThanOrEqualToConstant: 380),
+
+            div2.topAnchor.constraint(equalTo: middle.topAnchor),
+            div2.leadingAnchor.constraint(equalTo: middle.trailingAnchor),
+            div2.bottomAnchor.constraint(equalTo: middle.bottomAnchor),
+            div2.widthAnchor.constraint(equalToConstant: 1),
+
+            // 右栏：固定 300
+            right.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            right.leadingAnchor.constraint(equalTo: div2.trailingAnchor),
+            right.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            right.widthAnchor.constraint(equalToConstant: 300),
+            right.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+
+            // 底栏
+            bottomSep.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            bottomSep.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            bottomSep.bottomAnchor.constraint(equalTo: bottomBar.topAnchor),
+
+            bottomBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            bottomBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            bottomBar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            bottomBar.heightAnchor.constraint(equalToConstant: 30),
+        ])
+
+        w.contentView = container
+        w.delegate = self
+        window = w
+
+        // 窗口可缩放：列数随宽度变化，需要监听
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResizeNotification, object: w, queue: .main
+        ) { [weak self] _ in
+            self?.relayoutGridColumns()
+        }
+
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: 顶栏
+
+    private func buildTopBar() -> NSView {
+        let bar = NSView()
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.wantsLayer = true
+        bar.layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.05).cgColor
+
+        let icon = NSImageView()
+        icon.image = NSApp.applicationIconImage
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        let name = NSTextField(labelWithString: "WallLocus")
+        name.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        name.translatesAutoresizingMaskIntoConstraints = false
+
+        searchField.placeholderString = L10n.t("top.searchPlaceholder")
+        searchField.font = NSFont.systemFont(ofSize: 12)
+        searchField.target = self
+        searchField.action = #selector(searchChanged)
+        searchField.delegate = self
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+
+        settingsButton.image = NSImage(systemSymbolName: "gearshape",
+                                       accessibilityDescription: L10n.t("top.settings"))
+        settingsButton.bezelStyle = .rounded
+        settingsButton.target = self
+        settingsButton.action = #selector(showSettingsMenu)
+        settingsButton.translatesAutoresizingMaskIntoConstraints = false
+
+        for v in [icon, name, searchField, settingsButton] { bar.addSubview(v) }
+
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
+            icon.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 26),
+            icon.heightAnchor.constraint(equalToConstant: 26),
+
+            name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
+            name.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+
+            settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
+            settingsButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            settingsButton.widthAnchor.constraint(equalToConstant: 30),
+
+            searchField.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
+            searchField.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            searchField.widthAnchor.constraint(equalToConstant: 240),
+            searchField.heightAnchor.constraint(equalToConstant: 24),
+        ])
+        return bar
+    }
+
+    // MARK: 中栏（图库）
+
+    private func buildLibraryPane() -> NSView {
+        let pane = NSView()
+        pane.translatesAutoresizingMaskIntoConstraints = false
+
+        addButton.title = L10n.t("win.addFiles")
+        addButton.bezelStyle = .rounded
+        addButton.controlSize = .small
+        addButton.target = self
+        addButton.action = #selector(addFiles)
+        addButton.translatesAutoresizingMaskIntoConstraints = false
+
+        let toolbar = NSStackView(views: [addButton])
+        toolbar.orientation = .horizontal
+        toolbar.spacing = 8
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+
+        thumbnailGrid.onSelect = { [weak self] path in self?.selectFromGrid(path: path) }
         thumbnailGrid.onContextMenu = { [weak self] path, view in
             self?.makeCardMenu(path: path, view: view)
         }
         thumbnailGrid.onDoubleClick = { [weak self] path in
-            // 双击 = 直接进入重命名
             guard let self,
                   let idx = self.state.library.firstIndex(where: { $0.path == path }) else { return }
             self.libraryPopup.selectItem(at: idx)
@@ -943,79 +1067,96 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.nameField.selectText(nil)
         }
         thumbnailGrid.translatesAutoresizingMaskIntoConstraints = false
-        thumbnailGrid.widthAnchor.constraint(equalToConstant: 555).isActive = true
-        root.addArrangedSubview(thumbnailGrid)
 
-        let addBtn = NSButton(title: L10n.t("win.addFiles"), target: self, action: #selector(addFiles))
-        addBtn.bezelStyle = .rounded
-        assignButton.target = self
-        assignButton.action = #selector(assignToTarget)
-        assignButton.bezelStyle = .rounded
-        removeButton.target = self
-        removeButton.action = #selector(removeFromLibrary)
-        removeButton.bezelStyle = .rounded
-        stopButton.title = L10n.t("win.stopAll")
-        stopButton.target = self
-        stopButton.action = #selector(stopAll)
-        stopButton.bezelStyle = .rounded
-        let stopBtn = stopButton
-        pauseButton.bezelStyle = .rounded
-        pauseButton.target = self
-        pauseButton.action = #selector(togglePause)
-        let row1 = NSStackView(views: [addBtn, assignButton, removeButton, stopBtn, pauseButton])
-        row1.orientation = .horizontal
-        row1.spacing = 8
-        root.addArrangedSubview(row1)
+        let emptyLabel = NSTextField(labelWithString: L10n.t("library.emptyHint"))
+        emptyLabel.font = NSFont.systemFont(ofSize: 12)
+        emptyLabel.textColor = .tertiaryLabelColor
+        emptyLabel.alignment = .center
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+        emptyLabel.isHidden = true
+        libraryEmptyLabel = emptyLabel
 
-        // 预设行：记住「哪块屏用哪张壁纸」，一键切回
-        presetPopup.target = self
-        presetPopup.action = #selector(presetSelectionChanged)
-        presetPopup.translatesAutoresizingMaskIntoConstraints = false
-        presetPopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        for v in [toolbar, thumbnailGrid, emptyLabel] { pane.addSubview(v) }
 
-        savePresetButton.title = L10n.t("preset.save")
-        savePresetButton.bezelStyle = .rounded
-        savePresetButton.controlSize = .small
-        savePresetButton.target = self
-        savePresetButton.action = #selector(savePreset)
+        NSLayoutConstraint.activate([
+            toolbar.topAnchor.constraint(equalTo: pane.topAnchor, constant: 10),
+            toolbar.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 14),
 
-        loadPresetButton.title = L10n.t("preset.load")
-        loadPresetButton.bezelStyle = .rounded
-        loadPresetButton.controlSize = .small
-        loadPresetButton.target = self
-        loadPresetButton.action = #selector(loadSelectedPreset)
+            thumbnailGrid.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8),
+            thumbnailGrid.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 10),
+            thumbnailGrid.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -10),
+            thumbnailGrid.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
 
-        deletePresetButton.title = L10n.t("preset.delete")
-        deletePresetButton.bezelStyle = .rounded
-        deletePresetButton.controlSize = .small
-        deletePresetButton.target = self
-        deletePresetButton.action = #selector(deleteSelectedPreset)
+            emptyLabel.centerXAnchor.constraint(equalTo: pane.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: pane.centerYAnchor),
+        ])
+        return pane
+    }
 
-        let presetLabel = NSTextField(labelWithString: L10n.t("preset.label"))
-        presetLabel.alignment = .right
-        presetLabel.translatesAutoresizingMaskIntoConstraints = false
-        presetLabel.widthAnchor.constraint(equalToConstant: 90).isActive = true
+    // MARK: 右栏（详情）
 
-        let presetRow = NSStackView(views: [presetLabel, presetPopup,
-                                            savePresetButton, loadPresetButton,
-                                            deletePresetButton])
-        presetRow.orientation = .horizontal
-        presetRow.spacing = 6
-        presetRow.alignment = .centerY
-        root.addArrangedSubview(presetRow)
+    private func buildDetailPane() -> NSView {
+        let pane = NSView()
+        pane.translatesAutoresizingMaskIntoConstraints = false
 
-        root.addArrangedSubview(separator())
+        let root = NSStackView()
+        root.orientation = .vertical
+        root.alignment = .leading
+        root.spacing = 10
+        root.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        root.translatesAutoresizingMaskIntoConstraints = false
 
-        scopeLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        scopeLabel.textColor = .labelColor
-        // 文件名可能很长（实测 UUID 命名 40 字符），必须截断，
-        // 否则会把整行撑宽、进而把窗口宽度从 600 拉到 650。
-        scopeLabel.lineBreakMode = .byTruncatingMiddle
-        scopeLabel.cell?.usesSingleLineMode = true
-        scopeLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        scopeLabel.translatesAutoresizingMaskIntoConstraints = false
-        scopeLabel.widthAnchor.constraint(equalToConstant: 555).isActive = true
-        root.addArrangedSubview(scopeLabel)
+        // 显示器信息
+        paneTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        paneTitle.lineBreakMode = .byTruncatingTail
+        root.addArrangedSubview(paneTitle)
+
+        paneSubtitle.font = NSFont.systemFont(ofSize: 11)
+        paneSubtitle.textColor = .secondaryLabelColor
+        paneSubtitle.lineBreakMode = .byTruncatingMiddle
+        // 长文件名会撑宽面板，必须限宽
+        paneSubtitle.translatesAutoresizingMaskIntoConstraints = false
+        paneSubtitle.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        root.addArrangedSubview(paneSubtitle)
+
+        root.addArrangedSubview(separator(width: 270))
+
+        // 名称编辑
+        let nameLabel = NSTextField(labelWithString: L10n.t("win.itemName"))
+        nameLabel.font = NSFont.systemFont(ofSize: 11)
+        nameLabel.textColor = .secondaryLabelColor
+        root.addArrangedSubview(nameLabel)
+
+        nameField.isEditable = true
+        nameField.isBordered = true
+        nameField.bezelStyle = .roundedBezel
+        nameField.font = NSFont.systemFont(ofSize: 12)
+        nameField.placeholderString = L10n.t("win.namePlaceholder")
+        nameField.target = self
+        nameField.action = #selector(nameFieldCommitted(_:))
+        nameField.delegate = self
+        nameField.translatesAutoresizingMaskIntoConstraints = false
+        nameField.widthAnchor.constraint(equalToConstant: 200).isActive = true
+
+        resetNameButton.title = L10n.t("menu.resetName")
+        resetNameButton.bezelStyle = .rounded
+        resetNameButton.controlSize = .small
+        resetNameButton.target = self
+        resetNameButton.action = #selector(resetNameForSelection)
+        resetNameButton.isEnabled = false
+
+        let nameRow = NSStackView(views: [nameField, resetNameButton])
+        nameRow.orientation = .horizontal
+        nameRow.spacing = 6
+        root.addArrangedSubview(nameRow)
+
+        root.addArrangedSubview(separator(width: 270))
+
+        // 构图
+        let compTitle = NSTextField(labelWithString: L10n.t("detail.framing"))
+        compTitle.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        compTitle.textColor = .secondaryLabelColor
+        root.addArrangedSubview(compTitle)
 
         for (i, m) in ScaleMode.allCases.enumerated() {
             modePopup.addItem(withTitle: m.label)
@@ -1023,84 +1164,286 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         modePopup.target = self
         modePopup.action = #selector(adjustmentChanged)
-        root.addArrangedSubview(row(L10n.t("win.scaleMode"), modePopup, width: 300))
+        root.addArrangedSubview(compactRow(L10n.t("win.scaleMode"), modePopup))
 
         zoomSlider.target = self
         zoomSlider.action = #selector(adjustmentChanged)
-        zoomValue.alignment = .right
-        root.addArrangedSubview(sliderRow(L10n.t("win.zoom"), zoomSlider, zoomValue))
+        root.addArrangedSubview(compactSliderRow(L10n.t("win.zoom"), zoomSlider, zoomValue))
 
         offXSlider.target = self
         offXSlider.action = #selector(adjustmentChanged)
-        offXValue.alignment = .right
-        root.addArrangedSubview(sliderRow(L10n.t("win.offsetX"), offXSlider, offXValue))
+        root.addArrangedSubview(compactSliderRow(L10n.t("win.offsetX"), offXSlider, offXValue))
 
         offYSlider.target = self
         offYSlider.action = #selector(adjustmentChanged)
-        offYValue.alignment = .right
-        root.addArrangedSubview(sliderRow(L10n.t("win.offsetY"), offYSlider, offYValue))
+        root.addArrangedSubview(compactSliderRow(L10n.t("win.offsetY"), offYSlider, offYValue))
 
         muteCheck.target = self
         muteCheck.action = #selector(adjustmentChanged)
         muteCheck.state = .on
         root.addArrangedSubview(muteCheck)
 
-        autoStartCheck.target = self
-        autoStartCheck.action = #selector(toggleAutoStart)
-        autoStartCheck.state = isAutoStartEnabled() ? .on : .off
-        root.addArrangedSubview(autoStartCheck)
+        root.addArrangedSubview(separator(width: 270))
 
-        let hint = NSTextField(wrappingLabelWithString: L10n.t("win.hint"))
-        hint.textColor = .tertiaryLabelColor
-        hint.preferredMaxLayoutWidth = 555
-        root.addArrangedSubview(hint)
+        // 操作
+        let opTitle = NSTextField(labelWithString: L10n.t("detail.actions"))
+        opTitle.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        opTitle.textColor = .secondaryLabelColor
+        root.addArrangedSubview(opTitle)
 
-        // 兼容性警告行（默认隐藏，检测到无法解码的视频时显示）
+        assignButton.title = L10n.t("win.setWallpaper")
+        assignButton.bezelStyle = .rounded
+        assignButton.target = self
+        assignButton.action = #selector(assignToTarget)
+        assignButton.translatesAutoresizingMaskIntoConstraints = false
+        assignButton.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        root.addArrangedSubview(assignButton)
+
+        removeButton.title = L10n.t("win.removeFromLibrary")
+        removeButton.bezelStyle = .rounded
+        removeButton.target = self
+        removeButton.action = #selector(removeFromLibrary)
+        removeButton.translatesAutoresizingMaskIntoConstraints = false
+        removeButton.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        root.addArrangedSubview(removeButton)
+
+        stopButton.title = L10n.t("win.stopAll")
+        stopButton.target = self
+        stopButton.action = #selector(stopAll)
+        stopButton.bezelStyle = .rounded
+        stopButton.translatesAutoresizingMaskIntoConstraints = false
+        stopButton.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        root.addArrangedSubview(stopButton)
+
+        pauseButton.bezelStyle = .rounded
+        pauseButton.target = self
+        pauseButton.action = #selector(togglePause)
+        pauseButton.translatesAutoresizingMaskIntoConstraints = false
+        pauseButton.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        root.addArrangedSubview(pauseButton)
+
+        // 兼容性警告（有问题才显示）
+        warningLabel.font = NSFont.systemFont(ofSize: 11)
         warningLabel.textColor = .systemRed
-        warningLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        warningLabel.lineBreakMode = .byTruncatingTail
+        warningLabel.lineBreakMode = .byWordWrapping
+        warningLabel.maximumNumberOfLines = 2
+        warningLabel.translatesAutoresizingMaskIntoConstraints = false
+        warningLabel.widthAnchor.constraint(equalToConstant: 270).isActive = true
         fixButton.bezelStyle = .rounded
         fixButton.controlSize = .small
         fixButton.target = self
         fixButton.action = #selector(fixIncompatibleVideo)
         let wRow = NSStackView(views: [warningLabel, fixButton])
-        wRow.orientation = .horizontal
-        wRow.spacing = 8
+        wRow.orientation = .vertical
+        wRow.alignment = .leading
+        wRow.spacing = 4
         wRow.isHidden = true
         warningRow = wRow
         root.addArrangedSubview(wRow)
 
-        root.addArrangedSubview(separator())
-        statusLabel.textColor = .secondaryLabelColor
-        root.addArrangedSubview(statusLabel)
-        fullscreenLabel.textColor = .systemOrange
-        fullscreenLabel.font = NSFont.systemFont(ofSize: 11)
-        root.addArrangedSubview(fullscreenLabel)
-
-        // 整个面板都是拖放目标：从访达拖图片/视频进来即可添加
-        let container = DropZoneView()
-        container.onDrop = { [weak self] paths in
-            self?.handleDrop(paths)
-        }
-        container.addSubview(root)
+        pane.addSubview(root)
         NSLayoutConstraint.activate([
-            root.topAnchor.constraint(equalTo: container.topAnchor),
-            root.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            root.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            root.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor),
+            root.topAnchor.constraint(equalTo: pane.topAnchor),
+            root.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            root.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
         ])
-        w.contentView = container
-        w.delegate = self
-        // 记录初始所在屏幕，避免第一次移动被误判成"换屏"
-        if let scr = w.screen {
-            lastFittedScreenNumber = scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int
+        return pane
+    }
+
+    /// 右栏专用：标签在上、控件在下（300px 宽塞不下左右并排）
+    private func compactRow(_ label: String, _ control: NSView) -> NSStackView {
+        let l = NSTextField(labelWithString: label)
+        l.font = NSFont.systemFont(ofSize: 11)
+        l.textColor = .secondaryLabelColor
+        control.translatesAutoresizingMaskIntoConstraints = false
+        control.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        let s = NSStackView(views: [l, control])
+        s.orientation = .vertical
+        s.alignment = .leading
+        s.spacing = 3
+        return s
+    }
+
+    private func compactSliderRow(_ label: String,
+                                  _ slider: NSSlider,
+                                  _ value: NSTextField) -> NSStackView {
+        let l = NSTextField(labelWithString: label)
+        l.font = NSFont.systemFont(ofSize: 11)
+        l.textColor = .secondaryLabelColor
+
+        value.isEditable = true
+        value.isSelectable = true
+        value.isBordered = true
+        value.bezelStyle = .roundedBezel
+        value.alignment = .right
+        value.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        value.target = self
+        value.action = #selector(numberFieldCommitted(_:))
+        value.delegate = self
+        value.translatesAutoresizingMaskIntoConstraints = false
+        value.widthAnchor.constraint(equalToConstant: 72).isActive = true
+
+        slider.translatesAutoresizingMaskIntoConstraints = false
+
+        let row = NSStackView(views: [slider, value])
+        row.orientation = .horizontal
+        row.spacing = 6
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.widthAnchor.constraint(equalToConstant: 270).isActive = true
+
+        let s = NSStackView(views: [l, row])
+        s.orientation = .vertical
+        s.alignment = .leading
+        s.spacing = 3
+        return s
+    }
+
+
+    // MARK: 三栏联动
+
+    /// 侧栏选中项变化：显示器 -> 设定 targetDisplayID；预设 -> 只选中（不自动加载，3B 决策）
+    private func sidebarSelectionChanged(_ sel: SidebarSelection) {
+        switch sel {
+        case .allDisplays:
+            sidebarSelection = .allDisplays
+            targetDisplayID = ""
+            refreshControls()
+        case .display(let id):
+            sidebarSelection = .display(id)
+            targetDisplayID = id
+            refreshControls()
+        case .preset(let id):
+            sidebarSelection = .preset(id)
+            showPresetDetail(presetID: id)
         }
-        window = w
-        w.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 选中预设时，右栏显示它的摘要与「加载」按钮；不自动应用
+    private func showPresetDetail(presetID: String) {
+        guard let p = state.presets.first(where: { $0.id == presetID }) else { return }
+        paneTitle.stringValue = p.name
+        paneSubtitle.stringValue = L10n.t("detail.presetSummary", p.displayCount)
+        adjustControlsEnabled(false)
+        assignButton.isEnabled = false
+        removeButton.isEnabled = false
+        // 加载按钮复用「设为该屏壁纸」位置不合适，改用状态提示 + 右键菜单加载
+        loadPresetButton.isHidden = false
+        refreshStopButton()
+        refreshPresetButtons()
+        updateStatus()
+    }
+
+    /// 按窗口宽度算网格列数（卡片 112 + 间距 8）
+    private func relayoutGridColumns() {
+        guard let win = window else { return }
+        // 中栏宽 = 总宽 - 左 200 - 两条分隔线 2 - 右 300 - 中栏左右内边距 20
+        let middleWidth = win.frame.width - 200 - 2 - 300 - 20
+        let cols = max(2, min(8, Int((middleWidth + 8) / 120)))
+        guard cols != gridColumns else { return }
+        gridColumns = cols
+        thumbnailGrid.setGrid(columns: cols, rows: 3)
+    }
+
+    @objc private func searchChanged() {
+        searchQuery = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        reloadLibrary()
+    }
+
+    /// 过滤图库：匹配自定义名称、文件名，也匹配预设名（用户要求「改了预设名搜素材名也能搜出来」）
+    private func filteredLibrary() -> [LibraryItem] {
+        guard !searchQuery.isEmpty else { return state.library }
+        let q = searchQuery.lowercased()
+
+        // 预设名命中的素材也要留下
+        var viaPreset: Set<String> = []
+        for p in state.presets where p.name.lowercased().contains(q) {
+            viaPreset.formUnion(p.assignment.values)
+        }
+
+        return state.library.filter { item in
+            item.displayName.lowercased().contains(q)
+                || item.name.lowercased().contains(q)
+                || viaPreset.contains(item.path)
+        }
+    }
+
+    @objc private func showSettingsMenu() {
+        let menu = NSMenu()
+
+        let auto = NSMenuItem(title: L10n.t("menu.launchAtLogin"),
+                              action: #selector(toggleAutoStart),
+                              keyEquivalent: "")
+        auto.target = self
+        auto.state = isAutoStartEnabled() ? .on : .off
+        menu.addItem(auto)
+
+        let fs = NSMenuItem(title: L10n.t("menu.pauseOnFullscreen"),
+                            action: #selector(toggleFullscreenPause),
+                            keyEquivalent: "")
+        fs.target = self
+        fs.state = Settings.pauseOnFullscreen ? .on : .off
+        menu.addItem(fs)
+
+        let bat = NSMenuItem(title: L10n.t("menu.pauseOnBattery"),
+                             action: #selector(togglePauseOnBattery),
+                             keyEquivalent: "")
+        bat.target = self
+        bat.state = Settings.pauseOnBattery ? .on : .off
+        menu.addItem(bat)
+
+        menu.addItem(.separator())
+        let reveal = NSMenuItem(title: L10n.t("menu.openAppFolder"),
+                                action: #selector(revealAppInFinder),
+                                keyEquivalent: "")
+        reveal.target = self
+        menu.addItem(reveal)
+
+        menu.popUp(positioning: nil,
+                   at: NSPoint(x: 0, y: settingsButton.bounds.height + 4),
+                   in: settingsButton)
+    }
+
+    @objc private func revealAppInFinder() {
+        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+    }
+
+    /// 预设右键菜单
+    private func makePresetMenu(id: String, view: NSView) -> NSMenu? {
+        guard let p = state.presets.first(where: { $0.id == id }) else { return nil }
+        let menu = NSMenu()
+
+        let load = NSMenuItem(title: L10n.t("preset.load"),
+                              action: #selector(loadPresetFromMenu(_:)),
+                              keyEquivalent: "")
+        load.target = self
+        load.representedObject = p.id
+        menu.addItem(load)
+
+        let del = NSMenuItem(title: L10n.t("preset.delete"),
+                             action: #selector(deletePresetFromMenu(_:)),
+                             keyEquivalent: "")
+        del.target = self
+        del.representedObject = p.id
+        menu.addItem(del)
+        return menu
+    }
+
+    @objc private func loadPresetFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let p = state.presets.first(where: { $0.id == id }) else { return }
+        applyPreset(p)
+    }
+
+    @objc private func deletePresetFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let p = state.presets.first(where: { $0.id == id }) else { return }
+        StateStore.shared.update { st in st.presets.removeAll { $0.id == id } }
+        reloadPresets()
+        flashStatus(L10n.t("preset.deleted", p.name))
     }
 
     // MARK: 自适应尺寸
+
 
     /// 网格之外所有控件的实测高度（标题栏 + 间距 + 固定控件）。
     /// 改动界面布局时需要同步这个数字，否则窗口会算得太高或太矮。
@@ -1145,11 +1488,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         lastFittedScreenNumber = scr.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? Int
     }
 
-    private func separator() -> NSBox {
+    private func separator(width: CGFloat = 555) -> NSBox {
         let b = NSBox()
         b.boxType = .separator
         b.translatesAutoresizingMaskIntoConstraints = false
-        b.widthAnchor.constraint(equalToConstant: 555).isActive = true
+        b.widthAnchor.constraint(equalToConstant: width).isActive = true
         return b
     }
 
@@ -1225,11 +1568,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 libraryPopup.selectItem(at: idx)
             }
         }
-        // 同步网格（用下拉框当前选中项来高亮；同时告知哪些在用）
+        // 同步网格（用过滤后的结果；搜索时只显示命中的素材）
         let used = Set(state.assignment.values)
-        thumbnailGrid.reload(state.library,
+        let visible = filteredLibrary()
+        thumbnailGrid.reload(visible,
                              inUse: used,
                              selectedPath: selectedItem?.path)
+        libraryEmptyLabel?.isHidden = !visible.isEmpty
+        relayoutGridColumns()
+        // 侧栏也要跟着刷新（预设可能增删、屏幕可能变化）
+        sidebar.reload(presets: state.presets,
+                       screens: screens,
+                       selection: sidebarSelection)
         refreshControls()
     }
 
@@ -1378,10 +1728,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func refreshControls() {
+        loadPresetButton.isHidden = true
+        loadPresetButton.isEnabled = false
         guard let item = selectedItem else {
             scopeLabel.stringValue = L10n.t("win.scope.none")
             nameField.stringValue = ""
             nameField.isEnabled = false
+            paneTitle.stringValue = L10n.t("win.scope.none")
+            paneSubtitle.stringValue = ""
             adjustControlsEnabled(false)
             refreshStopButton()
             refreshPresetButtons()
@@ -1402,6 +1756,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             ? L10n.t("common.allDisplaysCount", screens.count)
             : (screens.first { screenID($0) == targetDisplayID }.map { screenTitle($0) } ?? L10n.t("common.unknownDisplay"))
         scopeLabel.stringValue = L10n.t("win.scope", scopeName, item.displayName)
+
+        // 右栏顶部：显示器标题（带分辨率）+ 该屏正在用的素材
+        if let s = targetScreens.first ?? NSScreen.screens.first {
+            let scale = s.backingScaleFactor
+            let w = Int(s.frame.width * scale)
+            let h = Int(s.frame.height * scale)
+            paneTitle.stringValue = "\(scopeName)  \(w)×\(h)"
+            // 这块屏当前用的是什么（可能和选中的素材不同）
+            let id = screenID(s)
+            if let using = state.assignment[id] {
+                let usingName = state.library.first { $0.path == using }?.displayName
+                    ?? (using as NSString).lastPathComponent
+                paneSubtitle.stringValue = L10n.t("detail.using", usingName)
+            } else {
+                paneSubtitle.stringValue = L10n.t("detail.notUsing")
+            }
+        } else {
+            paneTitle.stringValue = scopeName
+            paneSubtitle.stringValue = item.displayName
+        }
+        loadPresetButton.isHidden = true
+        loadPresetButton.isEnabled = false
 
         // 展示「第一块目标屏 × 该项目」已存下来的调整量
         guard let anyScreen = targetScreens.first ?? NSScreen.screens.first else {
