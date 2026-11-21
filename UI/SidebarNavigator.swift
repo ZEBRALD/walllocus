@@ -61,6 +61,32 @@ final class SidebarNavigator: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
+        // 左导航：三块区域里最「实」的一层，作为视觉基座。
+        // 用 sidebar 材质（系统侧栏观感）+ 略重的 tint 拉开层次。
+        let blur = NSVisualEffectView()
+        blur.material = .sidebar
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(blur, positioned: .below, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            blur.topAnchor.constraint(equalTo: topAnchor),
+            blur.leadingAnchor.constraint(equalTo: leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: trailingAnchor),
+            blur.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        let tint = NSView()
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = NSColor(white: 0, alpha: 0.10).cgColor
+        tint.translatesAutoresizingMaskIntoConstraints = false
+        blur.addSubview(tint)
+        NSLayoutConstraint.activate([
+            tint.topAnchor.constraint(equalTo: blur.topAnchor),
+            tint.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
+            tint.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+            tint.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+        ])
+
         outline.headerView = nil
         outline.backgroundColor = .clear
         outline.style = .sourceList

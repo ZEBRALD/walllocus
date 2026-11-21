@@ -884,10 +884,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
                          backing: .buffered, defer: false)
-        w.title = L10n.t("win.title")
+        // 标题栏不放文字：应用内已有「WallLocus」品牌区，系统标题会与之重叠。
+        // 保留标题栏本身（用户要靠它拖动窗口），只是把文字藏起来。
+        w.title = ""
+        w.titleVisibility = .hidden
         w.minSize = NSSize(width: 900, height: 600)
         w.center()
         w.isReleasedWhenClosed = false
+
+        // 让窗口能露出毛玻璃：标题栏透明、窗口自身不画实底
+        w.titlebarAppearsTransparent = true
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        // 内容延伸到标题栏下方，否则顶部会留一条与内容割裂的横带
+        w.styleMask.insert(.fullSizeContentView)
+        // 固定深色外观：毛玻璃在浅色外观下会发白，和壁纸缩略图深底不搭
+        w.appearance = NSAppearance(named: .darkAqua)
 
         // 整个面板都是拖放目标
         let container = DropZoneView()
@@ -929,9 +941,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         bottomBar.spacing = 10
         bottomBar.edgeInsets = NSEdgeInsets(top: 5, left: 14, bottom: 5, right: 14)
         bottomBar.translatesAutoresizingMaskIntoConstraints = false
-        bottomBar.wantsLayer = true
-        // 不透明背景：原来的 5% 半透明会让壁纸透上来，底栏文字糊在一起。
-        bottomBar.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        // 底栏：与顶栏同层次的毛玻璃，首尾呼应
+        _ = addGlass(to: bottomBar, material: .headerView, tint: 0.18)
 
         let bottomSep = NSBox()
         bottomSep.boxType = .separator
@@ -943,10 +954,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         NSLayoutConstraint.activate([
             // 顶栏
+            // 顶栏从窗口最顶端铺起（包含标题栏那一条），红绿灯就嵌在它里面 ——
+            // 这和网易云的做法一致：整条横栏是一个完整的视觉单元，
+            // 按钮浮在栏内而不是悬在没有背景的空白上。
             topBar.topAnchor.constraint(equalTo: container.topAnchor),
             topBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            topBar.heightAnchor.constraint(equalToConstant: 56),
+            topBar.heightAnchor.constraint(equalToConstant: 84),
 
             // 左栏：固定 200
             sidebar.topAnchor.constraint(equalTo: topBar.bottomAnchor),
@@ -984,7 +998,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
             bottomBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             bottomBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            bottomBar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            bottomBar.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.bottomAnchor),
             bottomBar.heightAnchor.constraint(equalToConstant: 30),
         ])
 
@@ -1003,13 +1017,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 给某块区域铺上毛玻璃，用透明度区分层次。
+    ///
+    /// 三档（越「靠后」的区域越透，越「靠前」越实）：
+    ///   .sidebar           左导航 —— 最实，作为视觉基座
+    ///   .headerView        顶栏 / 底栏 —— 中等
+    ///   .underWindowBackground  中栏 / 右栏 —— 最透，让壁纸冷暖透上来
+    ///
+    /// 层次感靠两层叠加实现：毛玻璃本身 + 一层极淡的 tint。
+    /// 只用 NSVisualEffectView 的话各区域看起来会一样平。
+    private func addGlass(to host: NSView,
+                          material: NSVisualEffectView.Material,
+                          blending: NSVisualEffectView.BlendingMode = .behindWindow,
+                          tint: CGFloat,
+                          cornerRadius: CGFloat = 0) -> NSVisualEffectView {
+        let blur = NSVisualEffectView()
+        blur.material = material
+        blur.blendingMode = blending
+        blur.state = .active
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        blur.wantsLayer = true
+        if cornerRadius > 0 {
+            blur.layer?.cornerRadius = cornerRadius
+            blur.layer?.masksToBounds = true
+        }
+        host.addSubview(blur, positioned: .below, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            blur.topAnchor.constraint(equalTo: host.topAnchor),
+            blur.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            blur.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+        ])
+        // 层次感的第二层：极淡 tint，越实的区域 tint 越重
+        if tint > 0 {
+            let t = NSView()
+            t.wantsLayer = true
+            t.layer?.backgroundColor = NSColor(white: 0, alpha: tint).cgColor
+            t.translatesAutoresizingMaskIntoConstraints = false
+            blur.addSubview(t)
+            NSLayoutConstraint.activate([
+                t.topAnchor.constraint(equalTo: blur.topAnchor),
+                t.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
+                t.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
+                t.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
+            ])
+        }
+        return blur
+    }
+
     // MARK: 顶栏
 
     private func buildTopBar() -> NSView {
         let bar = NSView()
         bar.translatesAutoresizingMaskIntoConstraints = false
-        bar.wantsLayer = true
-        bar.layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.05).cgColor
+        // 顶栏：中等层次的毛玻璃（比左右栏实一点，压住视觉重心）
+        _ = addGlass(to: bar, material: .headerView, tint: 0.18)
 
         let icon = NSImageView()
         icon.image = NSApp.applicationIconImage
@@ -1037,20 +1099,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         for v in [icon, name, searchField, settingsButton] { bar.addSubview(v) }
 
         NSLayoutConstraint.activate([
+            // 内部元素下移 28pt：上半部分留给红绿灯（与网易云同样的排布）
             icon.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            icon.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            icon.topAnchor.constraint(equalTo: bar.topAnchor, constant: 28 + 15),
             icon.widthAnchor.constraint(equalToConstant: 26),
             icon.heightAnchor.constraint(equalToConstant: 26),
 
             name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
-            name.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            name.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
 
             settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
-            settingsButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            settingsButton.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
             settingsButton.widthAnchor.constraint(equalToConstant: 30),
 
             searchField.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
-            searchField.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            searchField.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
             searchField.widthAnchor.constraint(equalToConstant: 240),
             searchField.heightAnchor.constraint(equalToConstant: 24),
         ])
@@ -1062,6 +1125,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func buildLibraryPane() -> NSView {
         let pane = NSView()
         pane.translatesAutoresizingMaskIntoConstraints = false
+        // 中栏：最透的一层，让壁纸的冷暖色透上来
+        _ = addGlass(to: pane, material: .underWindowBackground, tint: 0.04)
 
         addButton.title = L10n.t("win.addFiles")
         addButton.bezelStyle = .rounded
@@ -1120,6 +1185,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func buildDetailPane() -> NSView {
         let pane = NSView()
         pane.translatesAutoresizingMaskIntoConstraints = false
+        // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
+        _ = addGlass(to: pane, material: .underWindowBackground, tint: 0.12)
 
         let root = NSStackView()
         root.orientation = .vertical
