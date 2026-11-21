@@ -1086,7 +1086,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// AppKit 的 .roundedBezel 在大尺寸下仍然是「方角 + 内嵌阴影」，
     /// 和其余全部圆角的界面不搭。这里关掉 bezel、自绘圆角背景 +
     /// 1pt 描边，并在获得焦点时把描边换成强调色。
-    private func styleRoundedField(_ field: NSTextField, inset: CGFloat = 6) {
+    private func styleRoundedField(_ field: NSTextField,
+                                   height: CGFloat = 26,
+                                   inset: CGFloat = 7) {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
@@ -1095,8 +1097,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         field.layer?.borderWidth = 1
         field.layer?.borderColor = NSColor(white: 1, alpha: 0.10).cgColor
         field.layer?.backgroundColor = NSColor(white: 1, alpha: 0.05).cgColor
-        // 文本左右留白，否则会贴到圆角边上
         field.cell?.sendsActionOnEndEditing = true
+
+        // 关掉 border 后 NSTextField 失去原生高度，不显式设置会被压扁。
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.heightAnchor.constraint(equalToConstant: height).isActive = true
+
+        if let cell = field.cell as? VerticallyCenteredFieldCell {
+            cell.wraps = false
+            cell.isScrollable = true
+            // 左右内边距：自绘圆角框时文字会贴边
+            cell.horizontalInset = inset
+        }
     }
 
     // MARK: 顶栏
@@ -1262,6 +1274,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         nameLabel.textColor = .secondaryLabelColor
         root.addArrangedSubview(nameLabel)
 
+        nameField.cell = VerticallyCenteredFieldCell()
         nameField.isEditable = true
         nameField.font = NSFont.systemFont(ofSize: 12)
         styleRoundedField(nameField)
@@ -1273,15 +1286,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         nameField.widthAnchor.constraint(equalToConstant: 200).isActive = true
 
         resetNameButton.title = L10n.t("menu.resetName")
-        resetNameButton.bezelStyle = .rounded
-        resetNameButton.controlSize = .small
+        // 用 .texturedRounded 代替 .rounded：后者的 bezel 自带上下阴影边距，
+        // 即使给了 26pt 高度约束，视觉上仍比旁边的输入框高出一截。
+        resetNameButton.bezelStyle = .texturedRounded
+        resetNameButton.controlSize = .regular
+        resetNameButton.font = NSFont.systemFont(ofSize: 11)
         resetNameButton.target = self
         resetNameButton.action = #selector(resetNameForSelection)
         resetNameButton.isEnabled = false
+        resetNameButton.translatesAutoresizingMaskIntoConstraints = false
+        resetNameButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        resetNameButton.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
 
         let nameRow = NSStackView(views: [nameField, resetNameButton])
         nameRow.orientation = .horizontal
         nameRow.spacing = 6
+        nameRow.alignment = .centerY
+        nameRow.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(nameRow)
 
         root.addArrangedSubview(separator(width: 270))
@@ -1432,10 +1453,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         l.font = NSFont.systemFont(ofSize: 11)
         l.textColor = .secondaryLabelColor
 
+        value.cell = VerticallyCenteredFieldCell()
         value.isEditable = true
         value.isSelectable = true
         value.alignment = .right
-        styleRoundedField(value)
+        // 22pt：与 NSSlider 同高，否则数值框会撑高整行、滑块看起来下沉
+        styleRoundedField(value, height: 22, inset: 5)
         value.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         value.target = self
         value.action = #selector(numberFieldCommitted(_:))
@@ -1448,6 +1471,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let row = NSStackView(views: [slider, value])
         row.orientation = .horizontal
         row.spacing = 6
+        // 滑块与数值框沿中线对齐
+        row.alignment = .centerY
         row.translatesAutoresizingMaskIntoConstraints = false
         row.widthAnchor.constraint(equalToConstant: 270).isActive = true
 
@@ -1743,6 +1768,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         slider.translatesAutoresizingMaskIntoConstraints = false
         slider.widthAnchor.constraint(equalToConstant: 320).isActive = true
         // 数值框：可编辑，回车或失焦时提交
+        value.cell = VerticallyCenteredFieldCell()
         value.isEditable = true
         value.isSelectable = true
         value.alignment = .right
@@ -3069,6 +3095,54 @@ extension AppDelegate: NSMenuDelegate {
         } else {
             refreshMenuStates()
         }
+    }
+}
+
+/// 垂直居中 + 可控左右内边距的 NSTextFieldCell。
+///
+/// 关掉 NSTextField 的 border 后，标准 cell 会把文字画在框的上沿，
+/// 看起来「文字没对齐」。重写 drawingRect 让它在整个 cell 高度内居中。
+final class VerticallyCenteredFieldCell: NSTextFieldCell {
+    var horizontalInset: CGFloat = 7
+
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        var r = super.drawingRect(forBounds: rect)
+        let textH = attributedStringValue.size().height
+        if textH > 0 && textH < r.height {
+            let dy = (r.height - textH) / 2
+            r.origin.y += dy
+            r.size.height = textH
+        }
+        r.origin.x += horizontalInset
+        r.size.width -= horizontalInset * 2
+        return r
+    }
+
+    /// 编辑态与显示态用同一个矩形，否则点进去文字会跳位
+    override func edit(withFrame rect: NSRect,
+                       in controlView: NSView,
+                       editor textObj: NSText,
+                       delegate: Any?,
+                       event: NSEvent?) {
+        super.edit(withFrame: drawingRect(forBounds: rect),
+                   in: controlView,
+                   editor: textObj,
+                   delegate: delegate,
+                   event: event)
+    }
+
+    override func select(withFrame rect: NSRect,
+                         in controlView: NSView,
+                         editor textObj: NSText,
+                         delegate: Any?,
+                         start selStart: Int,
+                         length selLength: Int) {
+        super.select(withFrame: drawingRect(forBounds: rect),
+                     in: controlView,
+                     editor: textObj,
+                     delegate: delegate,
+                     start: selStart,
+                     length: selLength)
     }
 }
 
