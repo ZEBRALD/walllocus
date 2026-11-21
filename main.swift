@@ -63,6 +63,23 @@ struct LibraryItem: Codable, Equatable {
     }
 }
 
+/// 一套「哪块屏用哪张壁纸」的配置快照。
+///
+/// 除了 assignment，还存下相关的那部分 adjustments —— 否则加载预设后
+/// 每块屏的缩放/位置会退回默认值，用户还得重新调一遍构图。
+struct WallpaperPreset: Codable, Identifiable, Equatable {
+    var id: String = UUID().uuidString
+    var name: String
+    /// 显示器 UUID -> 素材路径
+    var assignment: [String: String] = [:]
+    /// 显示器 UUID -> 素材路径 -> 调整量（只存预设里用到的）
+    var adjustments: [String: [String: Adjustment]] = [:]
+    var createdAt: Date = Date()
+
+    /// 界面上显示的摘要，例如「3 块屏」
+    var displayCount: Int { assignment.count }
+}
+
 struct AppState: Codable {
     var library: [LibraryItem] = []
     /// 显示器 UUID -> 该屏当前使用的项目路径
@@ -77,6 +94,33 @@ struct AppState: Codable {
     /// 任何其它改动分配的操作都会把它清掉（见 StateStore.clearUndoAssignmentIfNeeded），
     /// 避免还原出一份和当前状态对不上的旧数据。
     var stoppedAssignment: [String: String]? = nil
+    /// 用户保存的壁纸配置预设，可一键加载
+    var presets: [WallpaperPreset] = []
+
+    /// 手写解码：新版本加字段时必须让旧数据仍能读出。
+    ///
+    /// Swift 自动合成的 Codable 只对 Optional 属性容忍缺失的 key，
+    /// 像 presets 这样的非 Optional 数组一旦缺失就会直接抛 keyNotFound，
+    /// 结果是升级后丢掉用户全部配置（实测如此）。所以逐字段 decodeIfPresent。
+    enum CodingKeys: String, CodingKey {
+        case library, assignment, adjustments, muted, lastSelectedItem
+        case stoppedAssignment, presets
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        library = try c.decodeIfPresent([LibraryItem].self, forKey: .library) ?? []
+        assignment = try c.decodeIfPresent([String: String].self, forKey: .assignment) ?? [:]
+        adjustments = try c.decodeIfPresent([String: [String: Adjustment]].self,
+                                            forKey: .adjustments) ?? [:]
+        muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? true
+        lastSelectedItem = try c.decodeIfPresent(String.self, forKey: .lastSelectedItem)
+        stoppedAssignment = try c.decodeIfPresent([String: String].self,
+                                                  forKey: .stoppedAssignment)
+        presets = try c.decodeIfPresent([WallpaperPreset].self, forKey: .presets) ?? []
+    }
 
     /// 当前是否有可还原的「刚才被停掉的分配」
     var canRestoreStopped: Bool {
@@ -708,6 +752,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let resetNameButton = NSButton(title: "", target: nil, action: nil)
     /// 「停止全部壁纸」/「还原壁纸」—— 同一个按钮，按状态切换标题与行为
     private let stopButton = NSButton(title: "", target: nil, action: nil)
+    /// 预设：下拉选择 + 保存/加载/删除
+    private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let savePresetButton = NSButton(title: "", target: nil, action: nil)
+    private let loadPresetButton = NSButton(title: "", target: nil, action: nil)
+    private let deletePresetButton = NSButton(title: "", target: nil, action: nil)
     private var nameFieldRow: NSStackView?
     private let assignButton = NSButton(title: L10n.t("win.setWallpaper"), target: nil, action: nil)
     private let removeButton = NSButton(title: L10n.t("win.removeFromLibrary"), target: nil, action: nil)
@@ -772,6 +821,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         startFullscreenMonitor()
         reloadScreens()
         reloadLibrary()
+        reloadPresets()
         WallpaperManager.shared.applyAll()
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
@@ -916,6 +966,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         row1.orientation = .horizontal
         row1.spacing = 8
         root.addArrangedSubview(row1)
+
+        // 预设行：记住「哪块屏用哪张壁纸」，一键切回
+        presetPopup.target = self
+        presetPopup.action = #selector(presetSelectionChanged)
+        presetPopup.translatesAutoresizingMaskIntoConstraints = false
+        presetPopup.widthAnchor.constraint(equalToConstant: 240).isActive = true
+
+        savePresetButton.title = L10n.t("preset.save")
+        savePresetButton.bezelStyle = .rounded
+        savePresetButton.controlSize = .small
+        savePresetButton.target = self
+        savePresetButton.action = #selector(savePreset)
+
+        loadPresetButton.title = L10n.t("preset.load")
+        loadPresetButton.bezelStyle = .rounded
+        loadPresetButton.controlSize = .small
+        loadPresetButton.target = self
+        loadPresetButton.action = #selector(loadSelectedPreset)
+
+        deletePresetButton.title = L10n.t("preset.delete")
+        deletePresetButton.bezelStyle = .rounded
+        deletePresetButton.controlSize = .small
+        deletePresetButton.target = self
+        deletePresetButton.action = #selector(deleteSelectedPreset)
+
+        let presetLabel = NSTextField(labelWithString: L10n.t("preset.label"))
+        presetLabel.alignment = .right
+        presetLabel.translatesAutoresizingMaskIntoConstraints = false
+        presetLabel.widthAnchor.constraint(equalToConstant: 90).isActive = true
+
+        let presetRow = NSStackView(views: [presetLabel, presetPopup,
+                                            savePresetButton, loadPresetButton,
+                                            deletePresetButton])
+        presetRow.orientation = .horizontal
+        presetRow.spacing = 6
+        presetRow.alignment = .centerY
+        root.addArrangedSubview(presetRow)
 
         root.addArrangedSubview(separator())
 
@@ -1297,6 +1384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             nameField.isEnabled = false
             adjustControlsEnabled(false)
             refreshStopButton()
+            refreshPresetButtons()
             updateStatus()
             return
         }
@@ -1308,6 +1396,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 没有别名时「恢复文件名」无意义，置灰
         resetNameButton.isEnabled = item.hasAlias
         refreshStopButton()
+        refreshPresetButtons()
         adjustControlsEnabled(true)
         let scopeName = targetDisplayID.isEmpty
             ? L10n.t("common.allDisplaysCount", screens.count)
@@ -1641,6 +1730,158 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         WallpaperManager.shared.purgeCaches()
         refreshControls()
         flashStatus(L10n.t("status.stoppedAll", snapshot.count))
+    }
+
+    // MARK: 预设
+
+    /// 重建预设下拉：名称 + 「N 块屏」摘要。
+    private func reloadPresets(select id: String? = nil) {
+        presetPopup.removeAllItems()
+        if state.presets.isEmpty {
+            presetPopup.addItem(withTitle: L10n.t("preset.empty"))
+            presetPopup.isEnabled = false
+        } else {
+            presetPopup.isEnabled = true
+            for p in state.presets {
+                presetPopup.addItem(withTitle: "\(p.name)  ·  \(p.displayCount)")
+            }
+            if let id = id,
+               let idx = state.presets.firstIndex(where: { $0.id == id }) {
+                presetPopup.selectItem(at: idx)
+            }
+        }
+        refreshPresetButtons()
+    }
+
+    private func refreshPresetButtons() {
+        let hasPreset = !state.presets.isEmpty && presetPopup.indexOfSelectedItem >= 0
+        loadPresetButton.isEnabled = hasPreset
+        deletePresetButton.isEnabled = hasPreset
+        // 没有任何屏在用时存预设没有意义
+        savePresetButton.isEnabled = !state.assignment.isEmpty
+    }
+
+    @objc private func presetSelectionChanged() {
+        refreshPresetButtons()
+    }
+
+    /// 把当前的「屏 × 壁纸」配置存成预设，连同这些组合的构图调整量。
+    @objc private func savePreset() {
+        guard !state.assignment.isEmpty else {
+            flashStatus(L10n.t("preset.nothingToSave"))
+            return
+        }
+
+        let suggested = L10n.t("preset.defaultName", state.presets.count + 1)
+        guard let name = promptForPresetName(defaultValue: suggested) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // 只取预设实际用到的那些调整量，避免把无关数据也塞进去
+        var relevant: [String: [String: Adjustment]] = [:]
+        for (display, path) in state.assignment {
+            if let adj = state.adjustments[display]?[path] {
+                relevant[display, default: [:]][path] = adj
+            }
+        }
+
+        let preset = WallpaperPreset(name: trimmed,
+                                     assignment: state.assignment,
+                                     adjustments: relevant)
+        StateStore.shared.update { st in
+            // 同名视为覆盖，省得列表里堆一堆重名项
+            st.presets.removeAll { $0.name == trimmed }
+            st.presets.append(preset)
+        }
+        reloadPresets(select: preset.id)
+        flashStatus(L10n.t("preset.saved", trimmed, preset.displayCount))
+    }
+
+    @objc private func loadSelectedPreset() {
+        let idx = presetPopup.indexOfSelectedItem
+        guard idx >= 0, idx < state.presets.count else { return }
+        applyPreset(state.presets[idx])
+    }
+
+    /// 应用预设。显示器 UUID 对不上（换过屏、拔过线）或素材已删除的条目跳过，
+    /// 并把跳过的数量告诉用户，而不是整份失败。
+    private func applyPreset(_ preset: WallpaperPreset) {
+        let alive = Set(screens.map { screenID($0) })
+        var applied = 0
+        var skipped = 0
+
+        StateStore.shared.update { st in
+            for (display, path) in preset.assignment {
+                guard alive.contains(display),
+                      st.library.contains(where: { $0.path == path }) else {
+                    skipped += 1
+                    continue
+                }
+                st.assignment[display] = path
+                if let adj = preset.adjustments[display]?[path] {
+                    st.setAdjustment(adj, display: display, item: path)
+                }
+                applied += 1
+            }
+            // 预设是用户明确的选择，旧的「停止前快照」不再有意义
+            st.stoppedAssignment = nil
+        }
+
+        // 应用后把选择同步到预设里第一块屏用的素材，方便继续微调
+        if let firstPath = preset.assignment.values.first(where: { p in
+            state.library.contains { $0.path == p }
+        }), let idx = state.library.firstIndex(where: { $0.path == firstPath }) {
+            libraryPopup.selectItem(at: idx)
+            StateStore.shared.update { $0.lastSelectedItem = firstPath }
+        }
+
+        WallpaperManager.shared.applyAll()
+        reloadLibrary()
+        refreshControls()
+
+        if applied == 0 {
+            flashStatus(L10n.t("preset.loadFailed"))
+        } else if skipped > 0 {
+            flashStatus(L10n.t("preset.loadedPartial", preset.name, applied, skipped))
+        } else {
+            flashStatus(L10n.t("preset.loaded", preset.name, applied))
+        }
+    }
+
+    @objc private func deleteSelectedPreset() {
+        let idx = presetPopup.indexOfSelectedItem
+        guard idx >= 0, idx < state.presets.count else { return }
+        let target = state.presets[idx]
+
+        let alert = NSAlert()
+        alert.messageText = L10n.t("preset.deleteConfirmTitle", target.name)
+        alert.informativeText = L10n.t("preset.deleteConfirmBody")
+        alert.addButton(withTitle: L10n.t("common.delete"))
+        alert.addButton(withTitle: L10n.t("common.cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        StateStore.shared.update { st in
+            st.presets.removeAll { $0.id == target.id }
+        }
+        reloadPresets()
+        flashStatus(L10n.t("preset.deleted", target.name))
+    }
+
+    /// 弹一个输入框要名字。取消返回 nil。
+    private func promptForPresetName(defaultValue: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = L10n.t("preset.namePromptTitle")
+        alert.informativeText = L10n.t("preset.namePromptBody")
+        alert.addButton(withTitle: L10n.t("common.save"))
+        alert.addButton(withTitle: L10n.t("common.cancel"))
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = defaultValue
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return field.stringValue
     }
 
     /// 按钮标题/可用性随状态变化：
