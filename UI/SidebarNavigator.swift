@@ -13,6 +13,8 @@ enum SidebarSelection: Equatable {
     case preset(String)      // WallpaperPreset.id
     case display(String)     // 显示器 UUID；空串代表"全部显示器"
     case allDisplays
+    /// 壁纸库分类筛选：nil = 全部，非 nil = 该子文件夹名
+    case library(String?)
 }
 
 final class SidebarNavigator: NSView {
@@ -23,11 +25,14 @@ final class SidebarNavigator: NSView {
     var onSavePreset: (() -> Void)?
     /// 预设右键菜单（传入 preset id）
     var onPresetMenu: ((String, NSView) -> NSMenu?)?
+    /// 点「新建分类」
+    var onNewCategory: (() -> Void)?
 
     private let scroll = NSScrollView()
-    private let outline = NSOutlineView()
+    private let outline = ClickOutlineView()
     private var presets: [WallpaperPreset] = []
     private var screens: [NSScreen] = []
+    private var categories: [String] = []
     private var suppressCallback = false
 
     /// 顶层节点：预设分组、显示器分组
@@ -38,14 +43,17 @@ final class SidebarNavigator: NSView {
             case display(String, String)   // (id, 标题)
             case allDisplays
             case savePreset
+            case library(String?)          // nil = 全部
+            case newCategory
         }
         let kind: Kind
         var children: [Node] = []
         init(_ kind: Kind) { self.kind = kind }
     }
+    private let libraryGroup = Node(.group("library"))
     private let presetGroup = Node(.group("preset"))
     private let displayGroup = Node(.group("display"))
-    private lazy var roots: [Node] = [presetGroup, displayGroup]
+    private lazy var roots: [Node] = [libraryGroup, presetGroup, displayGroup]
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -97,6 +105,21 @@ final class SidebarNavigator: NSView {
         outline.delegate = self
         outline.target = self
         outline.action = #selector(selectionChanged)
+        // 直接按点击的行分发，覆盖「点一下就取消选中」的那些行
+        outline.onClickRow = { [weak self] row in
+            guard let self,
+                  let node = self.outline.item(atRow: row) as? Node else { return }
+            switch node.kind {
+            case .newCategory:
+                self.outline.deselectAll(nil)
+                self.onNewCategory?()
+            case .savePreset:
+                self.outline.deselectAll(nil)
+                self.onSavePreset?()
+            default:
+                break        // 可选中的行交给 selectionChanged
+            }
+        }
         outline.autoresizesOutlineColumn = false
 
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
@@ -131,9 +154,16 @@ final class SidebarNavigator: NSView {
 
     func reload(presets: [WallpaperPreset],
                 screens: [NSScreen],
+                categories: [String] = [],
                 selection: SidebarSelection?) {
         self.presets = presets
         self.screens = screens
+        self.categories = categories
+
+        // 壁纸库：全部 + 各分类 + 新建
+        libraryGroup.children = [Node(.library(nil))]
+        libraryGroup.children += categories.map { Node(.library($0)) }
+        libraryGroup.children.append(Node(.newCategory))
 
         presetGroup.children = presets.map { Node(.preset($0)) }
         presetGroup.children.append(Node(.savePreset))
@@ -187,6 +217,28 @@ final class SidebarNavigator: NSView {
                 if case .preset(let p) = $0.kind { return p.id == id }
                 return false
             }
+        case .library(let cat):
+            return libraryGroup.children.first {
+                if case .library(let c) = $0.kind { return c == cat }
+                return false
+            }
+        }
+    }
+
+    /// 用子类拦截鼠标点击，直接判断点到了哪一行。
+    ///
+    /// 只靠 target/action 不可靠：outline 的 action 仅在「选中行发生变化」时触发，
+    /// 点「新建分类」这类「立即取消选中」的行时，回调可能根本不来。
+    final class ClickOutlineView: NSOutlineView {
+        var onClickRow: ((Int) -> Void)?
+
+        override func mouseDown(with event: NSEvent) {
+            let pt = convert(event.locationInWindow, from: nil)
+            let row = self.row(at: pt)
+            if row >= 0 {
+                onClickRow?(row)
+            }
+            super.mouseDown(with: event)
         }
     }
 
@@ -206,6 +258,11 @@ final class SidebarNavigator: NSView {
             // 「保存当前为预设」不是可停留的选中项，回到之前的状态
             outline.deselectRow(row)
             onSavePreset?()
+        case .library(let cat):
+            onSelect?(.library(cat))
+        case .newCategory:
+            outline.deselectRow(row)
+            onNewCategory?()
         case .group:
             break
         }
@@ -285,9 +342,11 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
                 label.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
                 label.textColor = .secondaryLabelColor
             }
-            label.stringValue = which == "preset"
-                ? L10n.t("nav.presets").uppercased()
-                : L10n.t("nav.displays").uppercased()
+            switch which {
+            case "library": label.stringValue = L10n.t("nav.library").uppercased()
+            case "preset":  label.stringValue = L10n.t("nav.presets").uppercased()
+            default:        label.stringValue = L10n.t("nav.displays").uppercased()
+            }
             return label
 
         case .preset(let p):
@@ -303,6 +362,15 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         case .savePreset:
             return iconCell(symbol: "plus.circle",
                             title: L10n.t("preset.saveCurrent"), dim: true)
+
+        case .library(let cat):
+            let title = cat ?? L10n.t("nav.libraryAll")
+            return iconCell(symbol: cat == nil ? "square.grid.2x2" : "folder",
+                            title: title, dim: false)
+
+        case .newCategory:
+            return iconCell(symbol: "folder.badge.plus",
+                            title: L10n.t("category.new"), dim: true)
         }
     }
 

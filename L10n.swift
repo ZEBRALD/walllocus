@@ -41,6 +41,18 @@ enum L10n {
     }
 
     private static let en: [String: String] = [
+        "nav.library": "Library",
+        "nav.libraryAll": "All",
+        "category.new": "New category",
+        "category.newTitle": "New wallpaper category",
+        "category.newBody": "Creates a subfolder in your wallpaper folder. Wallpapers you put there show up as a separate category.",
+        "category.namePlaceholder": "Category name",
+        "category.invalidName": "Name cannot contain / or :",
+        "category.created": "Created category \"%s\"",
+        "category.createFailed": "Could not create the category",
+        "setting.changeFolder": "Change wallpaper folder…",
+        "setting.currentFolder": "Folder: %@",
+        "folder.changed": "Wallpaper folder updated",
         "nav.presets": "Presets",
         "nav.displays": "Displays",
         "nav.allDisplays": "All displays (sync)",
@@ -199,6 +211,18 @@ enum L10n {
     ]
 
     private static let zh: [String: String] = [
+        "nav.library": "壁纸库",
+        "nav.libraryAll": "全部",
+        "category.new": "新建分类",
+        "category.newTitle": "新建壁纸分类",
+        "category.newBody": "会在壁纸文件夹里建一个子文件夹，放进去的壁纸会作为一个独立分类出现。",
+        "category.namePlaceholder": "分类名称",
+        "category.invalidName": "名称不能包含 / 或 :",
+        "category.created": "已新建分类「%s」",
+        "category.createFailed": "创建分类失败",
+        "setting.changeFolder": "更改壁纸库路径…",
+        "setting.currentFolder": "路径：%@",
+        "folder.changed": "壁纸库路径已更新",
         "nav.presets": "预设",
         "nav.displays": "显示器",
         "nav.allDisplays": "全部显示器（同步）",

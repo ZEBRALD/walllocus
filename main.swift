@@ -44,6 +44,9 @@ struct LibraryItem: Codable, Equatable {
     /// 文件名常常是 UUID（如 4DC7C38D-B69C-...JPG），对人没有辨识度，
     /// 所以允许起一个有意义的名字。
     var alias: String? = nil
+    /// 所属分类 = 壁纸文件夹下的子文件夹名。
+    /// 空串表示直接放在壁纸文件夹根目录。扫描时自动推断，不手工维护。
+    var category: String = ""
 
     var name: String { (path as NSString).lastPathComponent }
 
@@ -813,9 +816,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var detailDoc: NSView?
     private var detailRoot: NSStackView?
     /// 侧栏当前选中项；nil 表示还没选
-    private var sidebarSelection: SidebarSelection = .allDisplays
+    /// 侧栏选中项。初始停在「壁纸库 · 全部」——
+    /// 这是用户打开面板后最常看的地方，也让侧栏一启动就有明确高亮。
+    private var sidebarSelection: SidebarSelection = .library(nil)
     /// 搜索过滤词（空 = 不过滤）
     private var searchQuery: String = ""
+    /// 当前壁纸库筛选（nil = 全部）
+    private var libraryFilter: String? = nil
     /// 当前网格列数（随窗口宽度变化）
     private var gridColumns: Int = 5
     /// 当前网格行数（随窗口高度变化）
@@ -888,6 +895,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 首次使用时确认壁纸文件夹位置。
         // 放在窗口建好之后：这样弹窗有父窗口可依附，不会飘在桌面中央。
         ensureWallpaperFolder()
+        scanWallpaperFolder()
         reloadLibrary()
         reloadPresets()
         WallpaperManager.shared.applyAll()
@@ -946,6 +954,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.onSelect = { [weak self] sel in self?.sidebarSelectionChanged(sel) }
         sidebar.onSavePreset = { [weak self] in self?.savePreset() }
+        sidebar.onNewCategory = { [weak self] in self?.newCategory() }
         sidebar.onPresetMenu = { [weak self] id, view in
             self?.makePresetMenu(id: id, view: view)
         }
@@ -1602,6 +1611,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         case .preset(let id):
             sidebarSelection = .preset(id)
             showPresetDetail(presetID: id)
+        case .library(let cat):
+            sidebarSelection = .library(cat)
+            libraryFilter = cat
+            reloadLibrary()
+            refreshControls()
         }
     }
 
@@ -1755,9 +1769,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 不匹配预设名 —— 搜索框在顶栏、语义是「找这张壁纸」，
     /// 若把预设名也算进来，输入内容与结果对不上，反而让人困惑。
     private func filteredLibrary() -> [LibraryItem] {
-        guard !searchQuery.isEmpty else { return state.library }
+        // 先按侧栏选中的分类过滤，再按搜索词过滤
+        var items = state.library
+        if let cat = libraryFilter {
+            items = items.filter { $0.category == cat }
+        }
+        guard !searchQuery.isEmpty else { return items }
         let q = searchQuery.lowercased()
-        return state.library.filter { item in
+        return items.filter { item in
             item.displayName.lowercased().contains(q)
                 || item.name.lowercased().contains(q)
         }
@@ -1822,6 +1841,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         perPage.submenu = perPageSub
         librarySub.addItem(perPage)
+
+        librarySub.addItem(.separator())
+        let cur = NSMenuItem(title: L10n.t("setting.currentFolder", Settings.wallpaperFolder.path),
+                             action: nil, keyEquivalent: "")
+        cur.isEnabled = false
+        librarySub.addItem(cur)
+        let change = NSMenuItem(title: L10n.t("setting.changeFolder"),
+                                action: #selector(changeWallpaperFolder),
+                                keyEquivalent: "")
+        change.target = self
+        librarySub.addItem(change)
 
         library.submenu = librarySub
         menu.addItem(library)
@@ -1918,6 +1948,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 记录当前语言，下次启动生效（本次已构建的界面文案不追改）
         _ = lang
+    }
+
+    /// 更改壁纸库路径：选完立刻重新扫描，把新目录里的壁纸读进来。
+    @objc private func changeWallpaperFolder() {
+        let current = Settings.wallpaperFolder
+        guard let picked = pickFolder(startingAt: current) else { return }
+        Settings.wallpaperFolder = picked
+        Settings.hasChosenWallpaperFolder = true
+        try? FileManager.default.createDirectory(at: picked, withIntermediateDirectories: true)
+
+        // 换了目录，之前的分类筛选可能已不存在
+        libraryFilter = nil
+        scanWallpaperFolder()
+        reloadLibrary()
+        flashStatus(L10n.t("folder.changed"))
     }
 
     @objc private func changePageSize(_ sender: NSMenuItem) {
@@ -2062,6 +2107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 侧栏也要跟着刷新（预设可能增删、屏幕可能变化）
         sidebar.reload(presets: state.presets,
                        screens: screens,
+                       categories: wallpaperCategories(),
                        selection: sidebarSelection)
         refreshControls()
     }
@@ -2566,6 +2612,113 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
     }
 
+    /// 扫描壁纸文件夹，把里面的素材（含子文件夹）收进素材库。
+    ///
+    /// 子文件夹名即分类：根目录下的文件 category 为空，
+    /// 子文件夹 a/ 下的文件 category 为 "a"。只扫一层子目录，
+    /// 不做无限递归（更深的层级对壁纸库没有意义，也容易误收系统文件）。
+    private func scanWallpaperFolder() {
+        let fm = FileManager.default
+        let folder = Settings.wallpaperFolder
+        guard fm.fileExists(atPath: folder.path) else { return }
+
+        var found: [(path: String, category: String)] = []
+
+        func collect(in dir: URL, category: String) {
+            guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
+            for n in names {
+                if n.hasPrefix(".") { continue }          // 跳过 .DS_Store 等
+                let full = dir.appendingPathComponent(n)
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: full.path, isDirectory: &isDir) else { continue }
+                if isDir.boolValue {
+                    // 只往下走一层，避免深度递归
+                    if category.isEmpty { collect(in: full, category: n) }
+                    continue
+                }
+                if MediaTypes.isSupported(full.path) {
+                    found.append((full.path, category))
+                }
+            }
+        }
+        collect(in: folder, category: "")
+
+        guard !found.isEmpty || !state.library.isEmpty else { return }
+
+        StateStore.shared.update { st in
+            // 以文件夹为准重建库：保留已有条目的别名，新增的补上，
+            // 文件已不存在的移除。
+            var byPath = [String: LibraryItem]()
+            for it in st.library { byPath[it.path] = it }
+
+            var rebuilt: [LibraryItem] = []
+            for f in found {
+                var item = byPath[f.path] ?? LibraryItem(path: f.path,
+                                                         kind: MediaKind.detect(f.path))
+                item.category = f.category
+                rebuilt.append(item)
+            }
+            st.library = rebuilt
+        }
+
+        // 壁纸文件没了，对应的分配也该清掉
+        StateStore.shared.update { st in
+            let alive = Set(st.library.map { $0.path })
+            for (id, p) in st.assignment where !alive.contains(p) {
+                st.assignment.removeValue(forKey: id)
+            }
+        }
+    }
+
+    /// 壁纸文件夹下的所有分类（子文件夹名），按名称排序
+    private func wallpaperCategories() -> [String] {
+        let fm = FileManager.default
+        let folder = Settings.wallpaperFolder
+        guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { return [] }
+        var dirs: [String] = []
+        for n in names where !n.hasPrefix(".") {
+            var isDir: ObjCBool = false
+            let full = folder.appendingPathComponent(n)
+            if fm.fileExists(atPath: full.path, isDirectory: &isDir), isDir.boolValue {
+                dirs.append(n)
+            }
+        }
+        return dirs.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// 新建一个分类（= 壁纸文件夹下的子文件夹）
+    @objc private func newCategory() {
+        let alert = NSAlert()
+        alert.messageText = L10n.t("category.newTitle")
+        alert.informativeText = L10n.t("category.newBody")
+        alert.addButton(withTitle: L10n.t("common.save"))
+        alert.addButton(withTitle: L10n.t("common.cancel"))
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = L10n.t("category.namePlaceholder")
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        // 拒绝路径分隔符，避免建出意料之外的层级
+        guard !name.contains("/") && !name.contains(":") else {
+            flashStatus(L10n.t("category.invalidName"))
+            return
+        }
+
+        let dir = Settings.wallpaperFolder.appendingPathComponent(name, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            scanWallpaperFolder()
+            reloadLibrary()
+            flashStatus(L10n.t("category.created", name))
+        } catch {
+            flashStatus(L10n.t("category.createFailed"))
+        }
+    }
+
     @objc private func addFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -2776,6 +2929,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 保存成功的预设只会进数据，界面上看不到（实测就是这个 bug）。
         sidebar.reload(presets: state.presets,
                        screens: screens,
+                       categories: wallpaperCategories(),
                        selection: sidebarSelection)
     }
 
