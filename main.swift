@@ -1052,7 +1052,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: w, queue: .main
         ) { [weak self] _ in
-            self?.relayoutGridColumns()
+            // 缩放时布局还没落定，直接读 collection.bounds 会拿到旧宽度，
+            // 算出的卡片偏大 → 这一帧是 4 列，下一帧又变 5 列，来回跳。
+            // 推到下一轮 runloop，此时新宽度已生效，一次算准。
+            DispatchQueue.main.async {
+                self?.relayoutGridColumns()
+            }
         }
 
         // 搜索框是窗口里第一个可聚焦控件，AppKit 会把它设为
@@ -1776,11 +1781,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 图片等高：卡片高度由「可用宽 ÷ 5」按图片比例算出，
     /// 这样每张缩略图高度一致，扫视时不会参差。
     private func relayoutGridColumns() {
-        guard let win = window else { return }
+        guard window != nil else { return }
 
-        let middleWidth = win.frame.width - 260 - 2 - 300 - 8
-
-        // 固定 5 列
+        // 固定 5 列，任何窗口尺寸下都不变
         let cols = 5
 
         // 先定网格形状，再调卡片尺寸 —— 顺序反了会被 setGrid 重建的 layout
@@ -1794,8 +1797,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             thumbnailGrid.setGrid(columns: cols, rows: rows)
         }
 
-        // 卡片宽 = 可用宽均分（扣掉 pane 内边距与滚动条占位）
-        thumbnailGrid.applyCardSize(availableWidth: middleWidth - 6, columns: cols)
+        // 卡片宽 = 网格实际可用宽度均分。缩放只改缩略图大小，列数恒为 5。
+        thumbnailGrid.applyCardSize(availableWidth: thumbnailGrid.availableGridWidth,
+                                    columns: cols)
     }
 
     @objc private func searchChanged() {

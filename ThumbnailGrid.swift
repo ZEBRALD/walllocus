@@ -373,14 +373,28 @@ final class ThumbnailGrid: NSView {
     /// 按可用宽度与列数算出卡片尺寸。
     /// 宽度必须精确等于「可用宽 / 列数」：NSCollectionViewFlowLayout 只要一行塞得下
     /// 就会多塞，卡片稍窄就会出现比设定更多的列（实测出现过 5 列、7 列）。
+    /// 网格真正可用的宽度（集合视图的实际宽度）。
+    /// 用它而不是从窗口尺寸反推：后者是估算，窗口缩放时会与真实宽度
+    /// 有几像素偏差，导致 FlowLayout 时而塞得下 5 列、时而只剩 4 列 ——
+    /// 也就是用户看到的「4 列 5 列来回跳」。
+    var availableGridWidth: CGFloat {
+        let w = collection.bounds.width
+        return w > 0 ? w : scroll.contentView.bounds.width
+    }
+
     func applyCardSize(availableWidth: CGFloat, columns: Int) {
         guard columns > 0, availableWidth > 0 else { return }
         // 必须与 setGrid 里的 minimumInteritemSpacing / sectionInset 保持一致，
         // 否则算出来的卡片偏宽，一行塞不下第 5 个，实测只显示 4 列。
         let spacing: CGFloat = 10          // = layout.minimumInteritemSpacing
         let insetW: CGFloat = 10           // = sectionInset.left(0) + right(10)
-        let w = floor((availableWidth - insetW - spacing * CGFloat(columns - 1)) / CGFloat(columns))
-        let clamped = max(80, min(220, w))
+        // 减 1pt 吸收浮点误差：FlowLayout 只要差一点点就会把这一行
+        // 判成「放不下」，表现为列数在 4/5 之间来回跳。
+        let usable = availableWidth - insetW - spacing * CGFloat(columns - 1) - 1
+        let w = floor(usable / CGFloat(columns))
+        // 下限放宽到 44：要求「列数恒为 5」，窗口再窄也只能靠缩小卡片来让位。
+        // 原来卡在 80，窄窗口下 5×80 超出可用宽，FlowLayout 就会掉到 4 列甚至 3 列。
+        let clamped = max(44, min(220, w))
         let base = ThumbnailItem.baseCardSize
         let newSize = NSSize(width: clamped,
                              height: round(clamped * base.height / base.width))
