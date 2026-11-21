@@ -774,6 +774,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     // 三栏布局新增
     private let sidebar = SidebarNavigator(frame: .zero)
     private let searchField = NSSearchField(frame: .zero)
+    /// 点击空白结束编辑的事件监听器
+    private var clickMonitor: Any?
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
     private let addButton = NSButton(title: "", target: nil, action: nil)
     private let paneTitle = NSTextField(labelWithString: "")
@@ -1017,6 +1019,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // initialFirstResponder，导致一启动它就处于编辑态；
         // 用户点界面任何地方都像在触碰输入框（反馈的「太容易触发」）。
         w.initialFirstResponder = nil
+        installClickToEndEditing()
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -3151,6 +3154,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 点击输入框以外的地方时，结束编辑态。
+    ///
+    /// AppKit 不会自动这么做：文本框一旦成为第一响应者就会一直保持编辑态，
+    /// 直到显式 resign。用户反馈「点了别处，搜索框仍处于待输入状态」即此。
+    ///
+    /// 实现要点：用本地事件监听而非逐个视图加 mouseDown，
+    /// 这样按钮、侧栏、缩略图、空白区全都覆盖，且不影响控件自身的点击行为。
+    private func installClickToEndEditing() {
+        guard clickMonitor == nil else { return }
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            guard let self, let w = self.window else { return event }
+            // 只有当焦点在文本框里时才需要处理
+            guard w.firstResponder is NSTextView else { return event }
+
+            // 判断点击位置是否落在某个可编辑文本框内；是的话保持编辑
+            if let hit = w.contentView?.hitTest(event.locationInWindow) {
+                var v: NSView? = hit
+                while let cur = v {
+                    if let tf = cur as? NSTextField, tf.isEditable {
+                        return event        // 点的是输入框本身，正常处理
+                    }
+                    v = cur.superview
+                }
+            }
+
+            // 点到别处：先提交当前编辑，再交还焦点
+            w.makeFirstResponder(nil)
+            return event
+        }
     }
 
     // MARK: 窗口生命周期
