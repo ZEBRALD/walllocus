@@ -500,7 +500,10 @@ final class ThumbnailGrid: NSView {
     }
 
     /// 每页数量取自设置（默认 25）。与行列数解绑：窗口窄时行数更多，靠滚动查看。
-    var pageSize: Int { Settings.pageSize }
+    /// 不再分页：一页 = 全部素材。
+    /// 有了分类之后，每个分类下的数量本就有限，翻页反而碍事；
+    /// 连续滚动更接近照片 App 的浏览方式。
+    var pageSize: Int { max(1, allItems.count) }
 
     var pageCount: Int {
         guard pageSize > 0, !allItems.isEmpty else { return 1 }

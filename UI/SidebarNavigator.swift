@@ -9,6 +9,21 @@ import AppKit
 //  单一 selection 天然保证了两者互斥。
 // ============================================================
 
+/// 显示器当前的壁纸状态，用于侧栏右侧的小圆点。
+enum DisplayStatus {
+    case active      // 正在显示壁纸 → 绿
+    case paused      // 已暂停（手动/全屏/电池）→ 橙黄
+    case empty       // 未应用壁纸 → 白/灰
+
+    var color: NSColor {
+        switch self {
+        case .active: return .systemGreen
+        case .paused: return .systemOrange
+        case .empty:  return NSColor(white: 0.75, alpha: 0.9)
+        }
+    }
+}
+
 enum SidebarSelection: Equatable {
     case preset(String)      // WallpaperPreset.id
     case display(String)     // 显示器 UUID；空串代表"全部显示器"
@@ -33,6 +48,10 @@ final class SidebarNavigator: NSView {
     private var presets: [WallpaperPreset] = []
     private var screens: [NSScreen] = []
     private var categories: [String] = []
+    /// 每个显示器 id → 状态（由 main.swift 注入）
+    var displayStatuses: [String: DisplayStatus] = [:]
+    /// 「全部显示器」的聚合状态
+    var aggregateStatus: DisplayStatus = .empty
     private var suppressCallback = false
 
     /// 顶层节点：预设分组、显示器分组
@@ -67,6 +86,8 @@ final class SidebarNavigator: NSView {
 
     private func setup() {
         wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.masksToBounds = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
         // 左导航：三块区域里最「实」的一层，作为视觉基座。
@@ -76,6 +97,10 @@ final class SidebarNavigator: NSView {
         blur.blendingMode = .behindWindow
         blur.state = .active
         blur.translatesAutoresizingMaskIntoConstraints = false
+        // 玻璃层也要裁圆，否则它会在父视图圆角外露出直角
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = 10
+        blur.layer?.masksToBounds = true
         addSubview(blur, positioned: .below, relativeTo: nil)
         NSLayoutConstraint.activate([
             blur.topAnchor.constraint(equalTo: topAnchor),
@@ -145,6 +170,12 @@ final class SidebarNavigator: NSView {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scroll)
 
+        // 内部滚动视图要跟着父视图一起裁圆，否则它铺满矩形、
+        // 会把 10pt 圆角整个盖住（看起来还是直角）。
+        scroll.wantsLayer = true
+        scroll.layer?.cornerRadius = 10
+        scroll.layer?.masksToBounds = true
+
         NSLayoutConstraint.activate([
             // scroll 从顶栏下方开始：这样列表第一行不会被浮层压住，
             // 而左栏的毛玻璃背景由外层视图负责铺满到窗口顶端。
@@ -160,10 +191,14 @@ final class SidebarNavigator: NSView {
     func reload(presets: [WallpaperPreset],
                 screens: [NSScreen],
                 categories: [String] = [],
+                statuses: [String: DisplayStatus] = [:],
+                aggregate: DisplayStatus = .empty,
                 selection: SidebarSelection?) {
         self.presets = presets
         self.screens = screens
         self.categories = categories
+        self.displayStatuses = statuses
+        self.aggregateStatus = aggregate
 
         // 壁纸库：全部 + 各分类 + 新建
         libraryGroup.children = [Node(.library(nil))]
@@ -358,12 +393,14 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         case .preset(let p):
             return presetCell(p)
 
-        case .display(_, let title):
-            return iconCell(symbol: "display", title: title, dim: false)
+        case .display(let id, let title):
+            return iconCell(symbol: "display", title: title, dim: false,
+                            status: displayStatuses[id] ?? .empty)
 
         case .allDisplays:
             return iconCell(symbol: "rectangle.on.rectangle",
-                            title: L10n.t("nav.allDisplays"), dim: false)
+                            title: L10n.t("nav.allDisplays"), dim: false,
+                            status: aggregateStatus)
 
         case .savePreset:
             return iconCell(symbol: "plus.circle",
@@ -380,7 +417,8 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         }
     }
 
-    private func iconCell(symbol: String, title: String, dim: Bool) -> NSView {
+    private func iconCell(symbol: String, title: String, dim: Bool,
+                          status: DisplayStatus? = nil) -> NSView {
         let v = NSView()
         let img = NSImageView()
         img.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
@@ -395,13 +433,36 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
 
         v.addSubview(img)
         v.addSubview(label)
+
+        var trailingAnchor = v.trailingAnchor
+        var trailingConstant: CGFloat = -2
+
+        // 状态点：贴在行右端的小圆点（显示器状态一目了然，
+        // 替代了原来的底栏文字）
+        if let status {
+            let dot = NSView()
+            dot.wantsLayer = true
+            dot.layer?.cornerRadius = 3.5
+            dot.layer?.backgroundColor = status.color.cgColor
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            v.addSubview(dot)
+            NSLayoutConstraint.activate([
+                dot.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -6),
+                dot.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+                dot.widthAnchor.constraint(equalToConstant: 7),
+                dot.heightAnchor.constraint(equalToConstant: 7),
+            ])
+            trailingAnchor = dot.leadingAnchor
+            trailingConstant = -8
+        }
+
         NSLayoutConstraint.activate([
             img.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 2),
             img.centerYAnchor.constraint(equalTo: v.centerYAnchor),
             img.widthAnchor.constraint(equalToConstant: 15),
             img.heightAnchor.constraint(equalToConstant: 15),
             label.leadingAnchor.constraint(equalTo: img.trailingAnchor, constant: 7),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -2),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: trailingConstant),
             label.centerYAnchor.constraint(equalTo: v.centerYAnchor),
         ])
         return v

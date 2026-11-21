@@ -348,6 +348,9 @@ final class FullscreenMonitor {
     /// 每次全屏状态变化时回调（参数为当前处于全屏的显示器 ID 集合）
     var onChange: ((Set<String>) -> Void)?
 
+    /// 当前被全屏应用遮挡的显示器（侧栏状态点用它判断「已暂停」）
+    var coveredScreens: Set<String> { last }
+
     /// 用户可在菜单栏关掉该功能（持久化到 Settings）
     var isEnabled: Bool {
         get { Settings.pauseOnFullscreen }
@@ -946,6 +949,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 整个面板都是拖放目标
         let container = DropZoneView()
+        // 窗口基础底色：照片 App 是一整块深色底 + 浮起的侧栏卡片。
+        // 没有这一层时，顶栏区和面板之间的间隙会直接透出黑色。
+        // 注意用 withinWindow 的玻璃做不到这一点（那会挡住壁纸），
+        // 这里要的是不透明纯色，玻璃面板再压在上面做 liquid glass 效果。
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145,
+                                                   alpha: 1.0).cgColor
         container.onDrop = { [weak self] paths in
             self?.handleDrop(paths)
         }
@@ -967,81 +977,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 竖分隔线
         // 竖分隔线：自绘 1pt 单线（NSBox.separator 当竖线用会画成双线）
-        let div1 = hairline(vertical: true)
-        let div2 = hairline(vertical: true)
 
         // ── 底栏 ──────────────────────────────────────────────
+        // 底栏已移除：显示器状态改由侧栏圆点表达，
+        // 素材数与自启状态在顶栏副标题和设置菜单里已有，
+        // 全屏暂停提示由状态点的橙黄态取代。
         statusLabel.font = NSFont.systemFont(ofSize: 11)
-        statusLabel.textColor = .secondaryLabelColor
-        statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusLabel.isHidden = true
         fullscreenLabel.font = NSFont.systemFont(ofSize: 11)
-        fullscreenLabel.textColor = .systemOrange
-        let bottomBar = NSStackView(views: [statusLabel, NSView(), fullscreenLabel])
-        bottomBar.orientation = .horizontal
-        bottomBar.spacing = 10
-        bottomBar.edgeInsets = NSEdgeInsets(top: 5, left: 16, bottom: 5, right: 16)
-        bottomBar.translatesAutoresizingMaskIntoConstraints = false
-        // 底栏：与顶栏同层次的毛玻璃，首尾呼应
-        _ = addGlass(to: bottomBar, material: .headerView, tint: 0.18)
-
-        // 底栏横线：同样自绘，保证是单线
-        let bottomSep = hairline(vertical: false)
+        fullscreenLabel.isHidden = true
 
 
 
-        for v in [sidebar, div1, middle, div2, right, bottomSep, bottomBar, topBar] {
+        for v in [sidebar, middle, right, topBar] {
             container.addSubview(v)
         }
 
         NSLayoutConstraint.activate([
-            // 顶栏
-            // 顶栏从窗口最顶端铺起（包含标题栏那一条），红绿灯就嵌在它里面 ——
-            // 这和网易云的做法一致：整条横栏是一个完整的视觉单元，
-            // 按钮浮在栏内而不是悬在没有背景的空白上。
-            topBar.topAnchor.constraint(equalTo: container.topAnchor),
             topBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            topBar.topAnchor.constraint(equalTo: container.topAnchor),
             topBar.heightAnchor.constraint(equalToConstant: 76),
 
-            // 左栏：固定 200
-            // 三栏铺到窗口顶端，顶栏作为浮层叠在上面（照片 App 的做法）
-            sidebar.topAnchor.constraint(equalTo: container.topAnchor),
-            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            // 与 macOS 照片一致：260px，长显示器名不再截断
+            // ── 左栏：独立圆角面板 ──
+            // 不再用分割线切分窗口，改成像 macOS 照片那样「嵌在窗口里的一个区域」：
+            // 四周内缩 8pt、10pt 圆角、有自己的一层 liquid glass。
+            sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 76 + 8),
+            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
             sidebar.widthAnchor.constraint(equalToConstant: 260),
-            sidebar.bottomAnchor.constraint(equalTo: bottomSep.topAnchor),
+            // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
+            sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
-            div1.topAnchor.constraint(equalTo: sidebar.topAnchor),
-            div1.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            div1.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
-
-            // 中栏：弹性
+            // ── 中栏：通铺，不圆角、不内缩 ──
             middle.topAnchor.constraint(equalTo: container.topAnchor),
-            middle.leadingAnchor.constraint(equalTo: div1.trailingAnchor),
-            middle.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+            middle.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 8),
+            middle.trailingAnchor.constraint(equalTo: right.leadingAnchor, constant: -8),
+            middle.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             middle.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
 
-            div2.topAnchor.constraint(equalTo: middle.topAnchor),
-            div2.leadingAnchor.constraint(equalTo: middle.trailingAnchor),
-            div2.bottomAnchor.constraint(equalTo: middle.bottomAnchor),
-
-            // 右栏：固定 300
-            right.topAnchor.constraint(equalTo: container.topAnchor),
-            right.leadingAnchor.constraint(equalTo: div2.trailingAnchor),
-            right.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            // ── 右栏：独立圆角面板 ──
+            right.topAnchor.constraint(equalTo: container.topAnchor, constant: 76 + 8),
+            right.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
             right.widthAnchor.constraint(equalToConstant: 300),
-            right.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
-
-            // 底栏
-            bottomSep.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            bottomSep.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            bottomSep.bottomAnchor.constraint(equalTo: bottomBar.topAnchor),
-
-            bottomBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            bottomBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            bottomBar.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.bottomAnchor),
-            bottomBar.heightAnchor.constraint(equalToConstant: 30),
+            right.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
 
         w.contentView = container
@@ -1237,6 +1215,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
             name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
             name.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
+            // 给标题组一个明确宽度：它是垂直 StackView，内部标签又设了
+            // truncating，没有宽度约束时会被压成 0 宽，标题就看不见了。
+            name.widthAnchor.constraint(lessThanOrEqualToConstant: 300),
+            name.trailingAnchor.constraint(lessThanOrEqualTo: searchField.leadingAnchor, constant: -16),
 
             settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
             settingsButton.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
@@ -1320,7 +1302,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let pane = NSView()
         pane.translatesAutoresizingMaskIntoConstraints = false
         // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
-        _ = addGlass(to: pane, material: .underWindowBackground, tint: 0.12)
+        // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
+        _ = addGlass(to: pane, material: .sidebar, blending: .behindWindow,
+                     tint: 0.16, cornerRadius: 10)
+        // pane 自身也裁圆，否则子视图（滚动区）会把圆角盖掉
+        pane.wantsLayer = true
+        pane.layer?.cornerRadius = 10
+        pane.layer?.masksToBounds = true
 
         let root = NSStackView()
         root.orientation = .vertical
@@ -2147,9 +2135,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         libraryEmptyLabel?.isHidden = !visible.isEmpty
         relayoutGridColumns()
         // 侧栏也要跟着刷新（预设可能增删、屏幕可能变化）
+        let st = displayStatusMap()
         sidebar.reload(presets: state.presets,
                        screens: screens,
                        categories: wallpaperCategories(),
+                       statuses: st.perDisplay,
+                       aggregate: st.aggregate,
                        selection: sidebarSelection)
         refreshControls()
     }
@@ -2535,6 +2526,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             guard let self, let item = self.selectedItem else { return }
             self.checkCompatibility(item)
         }
+    }
+
+    /// 计算每块显示器的壁纸状态（供侧栏小圆点显示）。
+    ///
+    /// 绿 = 正在显示；橙黄 = 已暂停（手动暂停 / 全屏遮挡 / 电池供电）；
+    /// 白 = 未应用壁纸。
+    private func displayStatusMap() -> (perDisplay: [String: DisplayStatus],
+                                        aggregate: DisplayStatus) {
+        let manager = WallpaperManager.shared
+        var map: [String: DisplayStatus] = [:]
+        for s in screens {
+            let id = screenID(s)
+            let hasWallpaper = state.assignment[id] != nil
+            if !hasWallpaper {
+                map[id] = .empty
+            } else if manager.isPaused || FullscreenMonitor.shared.coveredScreens.contains(id) {
+                map[id] = .paused
+            } else {
+                map[id] = .active
+            }
+        }
+
+        // 聚合：有任一屏在用就是绿；否则有壁纸（全暂停）是橙黄；否则白
+        let values = Array(map.values)
+        let aggregate: DisplayStatus
+        if values.contains(.active) {
+            aggregate = .active
+        } else if values.contains(.paused) {
+            aggregate = .paused
+        } else {
+            aggregate = .empty
+        }
+        return (map, aggregate)
     }
 
     private func updateStatus() {
@@ -2991,9 +3015,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         refreshPresetButtons()
         // 三栏改版后预设显示在左侧导航里；这里不同步侧栏的话，
         // 保存成功的预设只会进数据，界面上看不到（实测就是这个 bug）。
+        let st = displayStatusMap()
         sidebar.reload(presets: state.presets,
                        screens: screens,
                        categories: wallpaperCategories(),
+                       statuses: st.perDisplay,
+                       aggregate: st.aggregate,
                        selection: sidebarSelection)
     }
 
