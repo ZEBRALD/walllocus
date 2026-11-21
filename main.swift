@@ -922,12 +922,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let right = buildDetailPane()
 
         // 竖分隔线
-        let div1 = NSBox()
-        div1.boxType = .separator
-        div1.translatesAutoresizingMaskIntoConstraints = false
-        let div2 = NSBox()
-        div2.boxType = .separator
-        div2.translatesAutoresizingMaskIntoConstraints = false
+        // 竖分隔线：自绘 1pt 单线（NSBox.separator 当竖线用会画成双线）
+        let div1 = hairline(vertical: true)
+        let div2 = hairline(vertical: true)
 
         // ── 底栏 ──────────────────────────────────────────────
         statusLabel.font = NSFont.systemFont(ofSize: 11)
@@ -944,9 +941,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 底栏：与顶栏同层次的毛玻璃，首尾呼应
         _ = addGlass(to: bottomBar, material: .headerView, tint: 0.18)
 
-        let bottomSep = NSBox()
-        bottomSep.boxType = .separator
-        bottomSep.translatesAutoresizingMaskIntoConstraints = false
+        // 底栏横线：同样自绘，保证是单线
+        let bottomSep = hairline(vertical: false)
 
 
 
@@ -973,7 +969,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             div1.topAnchor.constraint(equalTo: sidebar.topAnchor),
             div1.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             div1.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
-            div1.widthAnchor.constraint(equalToConstant: 1),
 
             // 中栏：弹性
             middle.topAnchor.constraint(equalTo: topBar.bottomAnchor),
@@ -984,7 +979,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             div2.topAnchor.constraint(equalTo: middle.topAnchor),
             div2.leadingAnchor.constraint(equalTo: middle.trailingAnchor),
             div2.bottomAnchor.constraint(equalTo: middle.bottomAnchor),
-            div2.widthAnchor.constraint(equalToConstant: 1),
 
             // 右栏：固定 300
             right.topAnchor.constraint(equalTo: topBar.bottomAnchor),
@@ -1065,6 +1059,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             ])
         }
         return blur
+    }
+
+    /// 单像素分隔线。
+    ///
+    /// 不用 NSBox(.separator)：它本质是带描边的盒子，当竖线用（宽 1pt）时
+    /// 左右两条描边都会被画出来，视觉上就成了「双线」—— 用户反馈「看起来像
+    /// 每个区域用了两条线分开」。这里直接铺一条 1pt 的纯色视图。
+    private func hairline(vertical: Bool) -> NSView {
+        let v = NSView()
+        v.wantsLayer = true
+        // 用「不透明的中间灰」：半透明白会透到下一层窗口（看起来像没画），
+        // 而且白色叠在深色玻璃上会变成脏灰。取比背景略亮、又不刺眼的灰度。
+        v.layer?.backgroundColor = NSColor(srgbRed: 0.34, green: 0.35, blue: 0.37, alpha: 1).cgColor
+        v.translatesAutoresizingMaskIntoConstraints = false
+        if vertical {
+            v.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        } else {
+            v.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        }
+        return v
     }
 
     // MARK: 顶栏
@@ -1684,12 +1698,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     // MARK: 自适应尺寸
 
 
-    private func separator(width: CGFloat = 555) -> NSBox {
-        let b = NSBox()
-        b.boxType = .separator
-        b.translatesAutoresizingMaskIntoConstraints = false
-        b.widthAnchor.constraint(equalToConstant: width).isActive = true
-        return b
+    /// 右栏内部的分组横线。与三栏竖线同色同观感。
+    private func separator(width: CGFloat = 555) -> NSView {
+        let v = NSView()
+        v.wantsLayer = true
+        v.layer?.backgroundColor = NSColor(srgbRed: 0.34, green: 0.35, blue: 0.37, alpha: 1).cgColor
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.heightAnchor.constraint(equalToConstant: 1).isActive = true
+        v.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return v
     }
 
     private func row(_ label: String, _ control: NSView, width: CGFloat) -> NSStackView {
