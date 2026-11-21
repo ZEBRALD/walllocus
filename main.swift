@@ -72,6 +72,17 @@ struct AppState: Codable {
     var muted: Bool = true
     /// 上次在壁纸库里选中的素材路径（重启后自动恢复）
     var lastSelectedItem: String? = nil
+    /// 「停止全部壁纸」前的分配快照，供还原使用。
+    /// 持久化存下来，重启后也能还原 —— 误点一次要重配三块屏太痛苦。
+    /// 任何其它改动分配的操作都会把它清掉（见 StateStore.clearUndoAssignmentIfNeeded），
+    /// 避免还原出一份和当前状态对不上的旧数据。
+    var stoppedAssignment: [String: String]? = nil
+
+    /// 当前是否有可还原的「刚才被停掉的分配」
+    var canRestoreStopped: Bool {
+        guard let s = stoppedAssignment else { return false }
+        return !s.isEmpty
+    }
 
     func adjustment(display: String, item: String) -> Adjustment {
         adjustments[display]?[item] ?? Adjustment()
@@ -695,6 +706,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let nameField = NSTextField(string: "")
     /// 「恢复文件名」按钮：仅在当前素材有别名时可用
     private let resetNameButton = NSButton(title: "", target: nil, action: nil)
+    /// 「停止全部壁纸」/「还原壁纸」—— 同一个按钮，按状态切换标题与行为
+    private let stopButton = NSButton(title: "", target: nil, action: nil)
     private var nameFieldRow: NSStackView?
     private let assignButton = NSButton(title: L10n.t("win.setWallpaper"), target: nil, action: nil)
     private let removeButton = NSButton(title: L10n.t("win.removeFromLibrary"), target: nil, action: nil)
@@ -891,8 +904,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         removeButton.target = self
         removeButton.action = #selector(removeFromLibrary)
         removeButton.bezelStyle = .rounded
-        let stopBtn = NSButton(title: L10n.t("win.stopAll"), target: self, action: #selector(stopAll))
-        stopBtn.bezelStyle = .rounded
+        stopButton.title = L10n.t("win.stopAll")
+        stopButton.target = self
+        stopButton.action = #selector(stopAll)
+        stopButton.bezelStyle = .rounded
+        let stopBtn = stopButton
         pauseButton.bezelStyle = .rounded
         pauseButton.target = self
         pauseButton.action = #selector(togglePause)
@@ -1250,6 +1266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             for s in self.targetScreens {
                 st.assignment[screenID(s)] = path
             }
+            st.stoppedAssignment = nil
         }
         WallpaperManager.shared.applyAll()
         reloadLibrary()
@@ -1279,6 +1296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             nameField.stringValue = ""
             nameField.isEnabled = false
             adjustControlsEnabled(false)
+            refreshStopButton()
             updateStatus()
             return
         }
@@ -1289,6 +1307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         // 没有别名时「恢复文件名」无意义，置灰
         resetNameButton.isEnabled = item.hasAlias
+        refreshStopButton()
         adjustControlsEnabled(true)
         let scopeName = targetDisplayID.isEmpty
             ? L10n.t("common.allDisplaysCount", screens.count)
@@ -1550,6 +1569,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             for s in self.targetScreens {
                 st.assignment[screenID(s)] = item.path
             }
+            // 用户已经手动决定了新配置，旧的「停止前快照」不再有意义
+            st.stoppedAssignment = nil
         }
         WallpaperManager.shared.applyAll()
         refreshControls()
@@ -1581,6 +1602,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             for display in st.adjustments.keys {
                 st.adjustments[display]?.removeValue(forKey: item.path)
             }
+            // 快照里若还引用着这个素材，还原时就得跳过它；
+            // 那样还原出来的配置会缺一块，不如直接作废整份快照。
+            if st.stoppedAssignment?.values.contains(item.path) == true {
+                st.stoppedAssignment = nil
+            }
             st.lastSelectedItem = nextSelection
         }
         reloadLibrary()
@@ -1588,8 +1614,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         refreshControls()
     }
 
+    /// 停止全部 / 还原壁纸 —— 同一个按钮，按当前状态切换行为。
+    /// 
+    /// 停止是破坏性的（三块屏要重新一个个配），所以先把分配快照存进 state，
+    /// 按钮随即变成「还原壁纸」，点一下就能回到停掉之前的完整配置。
     @objc private func stopAll() {
+        if state.canRestoreStopped && state.assignment.isEmpty {
+            restoreStopped()
+            return
+        }
+
+        let snapshot = state.assignment
+        guard !snapshot.isEmpty else {
+            // 本来就没有壁纸，没有可停也没有可还原的
+            flashStatus(L10n.t("status.nothingToStop"))
+            return
+        }
+
         StateStore.shared.update { st in
+            st.stoppedAssignment = snapshot
             st.assignment.removeAll()
         }
         WallpaperManager.shared.applyAll()
@@ -1597,6 +1640,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 导致「停止全部壁纸」后内存纹丝不动（实测 308 MB 不变）。
         WallpaperManager.shared.purgeCaches()
         refreshControls()
+        flashStatus(L10n.t("status.stoppedAll", snapshot.count))
+    }
+
+    /// 按钮标题/可用性随状态变化：
+    ///   有壁纸            -> 「停止全部壁纸」可用
+    ///   没壁纸但有快照    -> 「还原壁纸」可用
+    ///   没壁纸也没快照    -> 置灰
+    private func refreshStopButton() {
+        if state.assignment.isEmpty && state.canRestoreStopped {
+            stopButton.title = L10n.t("win.restoreAll")
+            stopButton.isEnabled = true
+        } else {
+            stopButton.title = L10n.t("win.stopAll")
+            stopButton.isEnabled = !state.assignment.isEmpty
+        }
+    }
+
+    /// 把上次停止前的分配找回来。
+    @objc private func restoreStopped() {
+        guard let snapshot = state.stoppedAssignment, !snapshot.isEmpty else { return }
+
+        // 只还原那些「现在还能对上」的显示器；换过屏/拔过线的条目直接跳过，
+        // 免得把壁纸塞到一个已经不存在的 display UUID 上。
+        let alive = Set(screens.map { screenID($0) })
+        var restored = 0
+        StateStore.shared.update { st in
+            for (id, path) in snapshot where alive.contains(id) {
+                // 素材可能已经从库里删掉了，跳过
+                guard st.library.contains(where: { $0.path == path }) else { continue }
+                st.assignment[id] = path
+                restored += 1
+            }
+            st.stoppedAssignment = nil
+        }
+        WallpaperManager.shared.applyAll()
+        refreshControls()
+
+        if restored == 0 {
+            flashStatus(L10n.t("status.restoreFailed"))
+        } else if restored < snapshot.count {
+            flashStatus(L10n.t("status.restoredPartial", restored, snapshot.count - restored))
+        } else {
+            flashStatus(L10n.t("status.restored", restored))
+        }
     }
 
     @objc private func adjustmentChanged() {
@@ -1718,8 +1805,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             all.target = self
             sub.addItem(all)
 
-            let stop = NSMenuItem(title: L10n.t("menu.stopAll"), action: #selector(self.stopAll), keyEquivalent: "")
+            // 菜单每次打开都会重建，所以直接按当前状态决定标题：
+            // 有壁纸时是「停止全部」，停掉后变成「还原壁纸」。
+            let canRestore = self.state.assignment.isEmpty && self.state.canRestoreStopped
+            let stop = NSMenuItem(title: L10n.t(canRestore ? "win.restoreAll" : "menu.stopAll"),
+                                  action: #selector(self.stopAll),
+                                  keyEquivalent: "")
             stop.target = self
+            stop.isEnabled = canRestore || !self.state.assignment.isEmpty
             sub.addItem(stop)
         }))
 
@@ -1819,8 +1912,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             all.target = self
             sub.addItem(all)
 
-            let stop = NSMenuItem(title: L10n.t("menu.stopAll"), action: #selector(self.stopAll), keyEquivalent: "")
+            // 菜单每次打开都会重建，所以直接按当前状态决定标题：
+            // 有壁纸时是「停止全部」，停掉后变成「还原壁纸」。
+            let canRestore = self.state.assignment.isEmpty && self.state.canRestoreStopped
+            let stop = NSMenuItem(title: L10n.t(canRestore ? "win.restoreAll" : "menu.stopAll"),
+                                  action: #selector(self.stopAll),
+                                  keyEquivalent: "")
             stop.target = self
+            stop.isEnabled = canRestore || !self.state.assignment.isEmpty
             sub.addItem(stop)
         }))
 
