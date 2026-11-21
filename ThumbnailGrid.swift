@@ -17,9 +17,31 @@ import AppKit
 /// 所以卡片根视图用这个子类把右键转出去。
 final class CardView: NSView {
     var onRightClick: (() -> NSMenu?)?
+    /// 单击：立刻通知选中（不等双击判定）
+    var onSingleClick: (() -> Void)?
+    /// 双击：进入重命名
+    var onDoubleClick: (() -> Void)?
 
     override func menu(for event: NSEvent) -> NSMenu? {
         onRightClick?()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // 单击：在 mouseDown 就提交选中，求即时反馈。
+        // 注意只在 clickCount == 1 时选中；第二次按下（clickCount == 2）
+        // 不能再次触发选中，否则会把「双击」拆成两次单击。
+        if event.clickCount == 1 {
+            onSingleClick?()
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        // 双击：抬手时按 clickCount 判定，进入重命名。
+        if event.clickCount == 2 {
+            onDoubleClick?()
+        }
+        super.mouseUp(with: event)
     }
 }
 
@@ -46,6 +68,8 @@ final class ThumbnailItem: NSCollectionViewItem {
     private var thumbHeightConstraint: NSLayoutConstraint?
 
     private(set) var representedPath: String?
+    /// 单击卡片（即时选中，不等双击判定窗口）
+    var onSingleClick: ((String) -> Void)?
     /// 双击卡片（用于进入重命名）
     var onDoubleClick: ((String) -> Void)?
     /// 右键卡片，由外部提供菜单
@@ -60,6 +84,14 @@ final class ThumbnailItem: NSCollectionViewItem {
         v.onRightClick = { [weak self] in
             guard let self, let path = self.representedPath else { return nil }
             return self.onContextMenu?(path, self.view)
+        }
+        v.onSingleClick = { [weak self] in
+            guard let self, let path = self.representedPath else { return }
+            self.onSingleClick?(path)
+        }
+        v.onDoubleClick = { [weak self] in
+            guard let self, let path = self.representedPath else { return }
+            self.onDoubleClick?(path)
         }
         v.wantsLayer = true
         v.layer?.cornerRadius = 5
@@ -121,16 +153,10 @@ final class ThumbnailItem: NSCollectionViewItem {
             inUseDot.heightAnchor.constraint(equalToConstant: 8),
         ])
 
-        // 双击进入重命名。单击仍由 collection view 处理选中，
-        // 所以这里只用 doubleClick 手势，不干扰选择。
-        let dbl = NSClickGestureRecognizer(target: self, action: #selector(handleDoubleClick))
-        dbl.numberOfClicksRequired = 2
-        v.addGestureRecognizer(dbl)
-    }
-
-    @objc private func handleDoubleClick() {
-        guard let path = representedPath else { return }
-        onDoubleClick?(path)
+        // 这里刻意不装 NSClickGestureRecognizer：
+        // 手势识别器会先拦截鼠标事件做判定，判定窗口约等于系统双击间隔（~500ms），
+        // 期间 CardView 收不到 mouseDown/mouseUp，表现就是「点一下要缓半秒才亮」。
+        // 双击改由 CardView 依据 event.clickCount 自己判断。
     }
 
     private func updateSelectionRing() {
@@ -258,6 +284,7 @@ final class ThumbnailGrid: NSView {
         super.init(coder: coder)
         setup()
     }
+
 
     private func setup() {
         let layout = NSCollectionViewFlowLayout()
@@ -543,6 +570,7 @@ extension ThumbnailGrid: NSCollectionViewDataSource, NSCollectionViewDelegate {
                        originalName: entry.name,
                        kind: entry.kind,
                        inUse: inUsePaths.contains(entry.path))
+        item.onSingleClick = { [weak self] p in self?.onSelect?(p) }
         item.onDoubleClick = { [weak self] p in self?.onDoubleClick?(p) }
         item.onContextMenu = { [weak self] p, v in self?.onContextMenu?(p, v) }
         return item
