@@ -817,14 +817,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var statusAutoItem: NSMenuItem?
     private var fullscreenMenuItem: NSMenuItem?
     private var batteryMenuItem: NSMenuItem?
-    private var displaySubmenu: NSMenu?
     private var scaleModeSubmenu: NSMenu?
     // 软件主菜单里的对应子菜单（与菜单栏镜像）
-    private var displaySubmenuApp: NSMenu?
     private var scaleModeSubmenuApp: NSMenu?
     private var settingsSubmenuApp: NSMenu?
     private var appPauseItem: NSMenuItem?
-    private var settingsInfoItem: NSMenuItem?
     private var settingsSubmenuStatus: NSMenu?
     private let fullscreenLabel = NSTextField(labelWithString: "")
     private var statusItem: NSStatusItem?
@@ -2838,10 +2835,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.appPauseItem = pause
             sub.addItem(pause)
 
-            let all = NSMenuItem(title: L10n.t("menu.allDisplays"), action: #selector(self.playOnAll), keyEquivalent: "")
-            all.target = self
-            sub.addItem(all)
-
             // 菜单每次打开都会重建，所以直接按当前状态决定标题：
             // 有壁纸时是「停止全部」，停掉后变成「还原壁纸」。
             let canRestore = self.state.assignment.isEmpty && self.state.canRestoreStopped
@@ -2852,14 +2845,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             stop.isEnabled = canRestore || !self.state.assignment.isEmpty
             sub.addItem(stop)
         }))
-
-        // —— 显示器 ——
-        let dispItem = NSMenuItem(title: L10n.t("menu.displays"), action: nil, keyEquivalent: "")
-        let dispSub = NSMenu()
-        dispSub.delegate = self
-        dispItem.submenu = dispSub
-        displaySubmenuApp = dispSub
-        mainMenu.addItem(dispItem)
 
         // —— 缩放模式 ——
         let modeItem = NSMenuItem(title: L10n.t("menu.scaleMode"), action: nil, keyEquivalent: "")
@@ -2908,14 +2893,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         statusAutoItem = auto
         sub.addItem(auto)
 
-        // 只读摘要：直接在这里填好内容（不能留空等下处刷新，
-        // 因为子菜单每次展开都会整体重建，旧 item 引用会失效）
-        sub.addItem(.separator())
-
-        let info = NSMenuItem(title: currentAdjustmentSummary(), action: nil, keyEquivalent: "")
-        info.isEnabled = false
-        settingsInfoItem = info
-        sub.addItem(info)
     }
 
     // MARK: 菜单栏图标（关窗后常驻）
@@ -2945,10 +2922,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.pauseMenuItem = pause
             sub.addItem(pause)
 
-            let all = NSMenuItem(title: L10n.t("menu.allDisplays"), action: #selector(self.playOnAll), keyEquivalent: "")
-            all.target = self
-            sub.addItem(all)
-
             // 菜单每次打开都会重建，所以直接按当前状态决定标题：
             // 有壁纸时是「停止全部」，停掉后变成「还原壁纸」。
             let canRestore = self.state.assignment.isEmpty && self.state.canRestoreStopped
@@ -2959,14 +2932,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             stop.isEnabled = canRestore || !self.state.assignment.isEmpty
             sub.addItem(stop)
         }))
-
-        // —— 显示器（每次展开动态重建，避免启动时序问题）——
-        let dispItem = NSMenuItem(title: L10n.t("menu.displays"), action: nil, keyEquivalent: "")
-        let dispSub = NSMenu()
-        dispSub.delegate = self
-        dispItem.submenu = dispSub
-        displaySubmenu = dispSub
-        menu.addItem(dispItem)
 
         // —— 缩放模式（当前选中素材）——
         let modeItem = NSMenuItem(title: L10n.t("menu.scaleMode"), action: nil, keyEquivalent: "")
@@ -3007,27 +2972,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     // MARK: 菜单动作
 
-    @objc private func playOnAll() {
-        WallpaperManager.shared.setPaused(false)
-        refreshPauseUI()
-    }
-
-    @objc private func focusDisplay(_ sender: NSMenuItem) {
-        guard sender.tag >= 0, sender.tag < screens.count else { return }
-        guard sender.tag < screens.count else { return }
-        targetDisplayID = screenID(screens[sender.tag])
-        targetPopup.selectItem(at: sender.tag + 1)
-        refreshControls()
-        refreshMenuStates()
-    }
-
-    @objc private func focusAllDisplays() {
-        targetDisplayID = ""
-        targetPopup.selectItem(at: 0)
-        refreshControls()
-        refreshMenuStates()
-    }
-
     @objc private func setScaleMode(_ sender: NSMenuItem) {
         let all = ScaleMode.allCases
         guard sender.tag < all.count else { return }
@@ -3042,25 +2986,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         refreshMenuStates()
     }
 
-    /// 重建「显示器」子菜单（屏幕数可能因热插拔变化）
-    private func rebuildDisplayMenu(into sub: NSMenu) {
-        sub.removeAllItems()
-        for (i, s) in screens.enumerated() {
-            let it = NSMenuItem(title: screenTitle(s),
-                                action: #selector(focusDisplay(_:)),
-                                keyEquivalent: "")
-            it.target = self
-            it.tag = i
-            it.state = (targetDisplayID == screenID(s)) ? .on : .off
-            sub.addItem(it)
-        }
-        sub.addItem(.separator())
-        let all = NSMenuItem(title: L10n.t("common.allDisplays"),
-                             action: #selector(focusAllDisplays), keyEquivalent: "")
-        all.target = self
-        all.state = targetDisplayID.isEmpty ? .on : .off
-        sub.addItem(all)
-    }
 
     /// 重建「缩放模式」子菜单（勾选跟随当前 屏×素材）
     private func rebuildScaleModeMenu(into sub: NSMenu) {
@@ -3093,16 +3018,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         batteryMenuItem?.state = Settings.pauseOnBattery ? .on : .off
         appMenuAutoItem?.state = isAutoStartEnabled() ? .on : .off
         statusAutoItem?.state = isAutoStartEnabled() ? .on : .off
-        settingsInfoItem?.title = currentAdjustmentSummary()
-    }
-
-    /// 设置菜单底部那行只读摘要
-    private func currentAdjustmentSummary() -> String {
-        guard let item = selectedItem, let first = targetScreens.first ?? NSScreen.screens.first else {
-            return L10n.t("compat.noSelection")
-        }
-        let a = state.adjustment(display: screenID(first), item: item.path)
-        return L10n.t("compat.summary", a.zoom * 100, a.offsetX, a.offsetY)
     }
 
     private func startFullscreenMonitor() {
@@ -3256,9 +3171,7 @@ extension AppDelegate: NSTextFieldDelegate {
 extension AppDelegate: NSMenuDelegate {
     /// 菜单栏每次展开前刷新勾选状态
     func menuNeedsUpdate(_ menu: NSMenu) {
-        if menu === displaySubmenu || menu === displaySubmenuApp {
-            rebuildDisplayMenu(into: menu)
-        } else if menu === scaleModeSubmenu || menu === scaleModeSubmenuApp {
+        if menu === scaleModeSubmenu || menu === scaleModeSubmenuApp {
             rebuildScaleModeMenu(into: menu)
         } else if menu === settingsSubmenuStatus || menu === settingsSubmenuApp {
             buildSettingsItems(into: menu)
