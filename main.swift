@@ -939,7 +939,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let bottomBar = NSStackView(views: [statusLabel, NSView(), fullscreenLabel])
         bottomBar.orientation = .horizontal
         bottomBar.spacing = 10
-        bottomBar.edgeInsets = NSEdgeInsets(top: 5, left: 14, bottom: 5, right: 14)
+        bottomBar.edgeInsets = NSEdgeInsets(top: 5, left: 16, bottom: 5, right: 16)
         bottomBar.translatesAutoresizingMaskIntoConstraints = false
         // 底栏：与顶栏同层次的毛玻璃，首尾呼应
         _ = addGlass(to: bottomBar, material: .headerView, tint: 0.18)
@@ -948,7 +948,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         bottomSep.boxType = .separator
         bottomSep.translatesAutoresizingMaskIntoConstraints = false
 
-        for v in [topBar, sidebar, div1, middle, div2, right, bottomSep, bottomBar] {
+        // 顶栏与内容区之间也补一条：两者都是毛玻璃，没有界线会糊成一片
+        let topSep = NSBox()
+        topSep.boxType = .separator
+        topSep.translatesAutoresizingMaskIntoConstraints = false
+
+        for v in [topBar, topSep, sidebar, div1, middle, div2, right, bottomSep, bottomBar] {
             container.addSubview(v)
         }
 
@@ -960,10 +965,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             topBar.topAnchor.constraint(equalTo: container.topAnchor),
             topBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            topBar.heightAnchor.constraint(equalToConstant: 84),
+            topBar.heightAnchor.constraint(equalToConstant: 76),
+
+            // 顶栏下边线
+            topSep.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            topSep.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            topSep.trailingAnchor.constraint(equalTo: container.trailingAnchor),
 
             // 左栏：固定 200
-            sidebar.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            sidebar.topAnchor.constraint(equalTo: topSep.bottomAnchor),
             sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             sidebar.widthAnchor.constraint(equalToConstant: 200),
             sidebar.bottomAnchor.constraint(equalTo: bottomSep.topAnchor),
@@ -974,7 +984,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             div1.widthAnchor.constraint(equalToConstant: 1),
 
             // 中栏：弹性
-            middle.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            middle.topAnchor.constraint(equalTo: topSep.bottomAnchor),
             middle.leadingAnchor.constraint(equalTo: div1.trailingAnchor),
             middle.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
             middle.widthAnchor.constraint(greaterThanOrEqualToConstant: 380),
@@ -985,7 +995,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             div2.widthAnchor.constraint(equalToConstant: 1),
 
             // 右栏：固定 300
-            right.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            right.topAnchor.constraint(equalTo: topSep.bottomAnchor),
             right.leadingAnchor.constraint(equalTo: div2.trailingAnchor),
             right.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             right.widthAnchor.constraint(equalToConstant: 300),
@@ -1100,15 +1110,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         NSLayoutConstraint.activate([
             // 内部元素下移 28pt：上半部分留给红绿灯（与网易云同样的排布）
-            icon.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            icon.topAnchor.constraint(equalTo: bar.topAnchor, constant: 28 + 15),
+            // 左边距 16：与右侧对称，也给红绿灯留出同等呼吸空间
+            icon.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
+            // 垂直位置：红绿灯占顶部 26，剩余 50 高的内容区内居中
+            icon.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 26 + 25),
             icon.widthAnchor.constraint(equalToConstant: 26),
             icon.heightAnchor.constraint(equalToConstant: 26),
 
             name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
             name.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
 
-            settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
+            settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
             settingsButton.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
             settingsButton.widthAnchor.constraint(equalToConstant: 30),
 
@@ -1166,12 +1178,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         for v in [toolbar, thumbnailGrid, emptyLabel] { pane.addSubview(v) }
 
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: pane.topAnchor, constant: 10),
-            toolbar.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 14),
+            toolbar.topAnchor.constraint(equalTo: pane.topAnchor, constant: 14),
+            toolbar.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 16),
 
             thumbnailGrid.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8),
-            thumbnailGrid.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 10),
-            thumbnailGrid.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -10),
+            // 网格左右与工具栏对齐（原来 10 比工具栏的 14 更靠外，两者不齐）
+            thumbnailGrid.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 16),
+            thumbnailGrid.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -16),
             thumbnailGrid.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
 
             emptyLabel.centerXAnchor.constraint(equalTo: pane.centerXAnchor),
@@ -1192,7 +1205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 10
-        root.edgeInsets = NSEdgeInsets(top: 14, left: 14, bottom: 14, right: 14)
+        root.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         root.translatesAutoresizingMaskIntoConstraints = false
 
         // 显示器信息
