@@ -42,6 +42,7 @@ enum L10n {
 
     private static let en: [String: String] = [
         "nav.library": "Library",
+        "header.count": "%d item(s)",
         "nav.libraryAll": "All",
         "category.new": "New category",
         "category.newTitle": "New wallpaper category",
@@ -212,6 +213,7 @@ enum L10n {
 
     private static let zh: [String: String] = [
         "nav.library": "壁纸库",
+        "header.count": "%d 个素材",
         "nav.libraryAll": "全部",
         "category.new": "新建分类",
         "category.newTitle": "新建壁纸分类",

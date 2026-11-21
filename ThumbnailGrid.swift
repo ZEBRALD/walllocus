@@ -98,14 +98,17 @@ final class ThumbnailItem: NSCollectionViewItem {
             self.onDoubleClick?(path)
         }
         v.wantsLayer = true
-        v.layer?.cornerRadius = 5
-        v.layer?.borderWidth = 2
+        // 照片 App 的图片没有卡片边框，只有一个圆角矩形的图片本身。
+        // 选中态仍用描边，但平时不画边框。
+        v.layer?.cornerRadius = 8
+        v.layer?.borderWidth = 0
         v.layer?.borderColor = NSColor.clear.cgColor
         view = v
 
         thumbView.imageScaling = .scaleProportionallyUpOrDown
         thumbView.wantsLayer = true
-        thumbView.layer?.cornerRadius = 4
+        thumbView.layer?.cornerRadius = 8
+        thumbView.layer?.masksToBounds = true
         thumbView.layer?.masksToBounds = true
         thumbView.layer?.backgroundColor = NSColor(white: 0.16, alpha: 1).cgColor
         thumbView.translatesAutoresizingMaskIntoConstraints = false
@@ -164,6 +167,8 @@ final class ThumbnailItem: NSCollectionViewItem {
     }
 
     private func updateSelectionRing() {
+        // 平时无边框，选中时才有强调色描边（与照片一致）
+        view.layer?.borderWidth = isSelected ? 3 : 0
         view.layer?.borderColor = isSelected
             ? NSColor.controlAccentColor.cgColor
             : NSColor.clear.cgColor
@@ -294,10 +299,10 @@ final class ThumbnailGrid: NSView {
         let layout = NSCollectionViewFlowLayout()
         layout.scrollDirection = .vertical
         layout.itemSize = ThumbnailItem.cardSize
-        layout.minimumInteritemSpacing = 8
-        layout.minimumLineSpacing = 8
-        // 右侧多留 12pt 给 overlay 滚动条，否则缩略图会被它压住一角
-        layout.sectionInset = NSEdgeInsets(top: 4, left: 2, bottom: 4, right: 12)
+        layout.minimumInteritemSpacing = 10
+        layout.minimumLineSpacing = 12
+        // 照片是通铺布局：左右几乎不留边，右侧只给滚动条让一点
+        layout.sectionInset = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 10)
 
         collection.collectionViewLayout = layout
         collection.register(ThumbnailItem.self,
@@ -370,8 +375,10 @@ final class ThumbnailGrid: NSView {
     /// 就会多塞，卡片稍窄就会出现比设定更多的列（实测出现过 5 列、7 列）。
     func applyCardSize(availableWidth: CGFloat, columns: Int) {
         guard columns > 0, availableWidth > 0 else { return }
-        let spacing: CGFloat = 8
-        let insetW: CGFloat = 4
+        // 必须与 setGrid 里的 minimumInteritemSpacing / sectionInset 保持一致，
+        // 否则算出来的卡片偏宽，一行塞不下第 5 个，实测只显示 4 列。
+        let spacing: CGFloat = 10          // = layout.minimumInteritemSpacing
+        let insetW: CGFloat = 10           // = sectionInset.left(0) + right(10)
         let w = floor((availableWidth - insetW - spacing * CGFloat(columns - 1)) / CGFloat(columns))
         let clamped = max(80, min(220, w))
         let base = ThumbnailItem.baseCardSize
@@ -401,10 +408,10 @@ final class ThumbnailGrid: NSView {
         let layout = NSCollectionViewFlowLayout()
         layout.scrollDirection = .vertical
         layout.itemSize = ThumbnailItem.cardSize
-        layout.minimumInteritemSpacing = 8
-        layout.minimumLineSpacing = 8
-        // 右侧多留 12pt 给 overlay 滚动条，否则缩略图会被它压住一角
-        layout.sectionInset = NSEdgeInsets(top: 4, left: 2, bottom: 4, right: 12)
+        layout.minimumInteritemSpacing = 10
+        layout.minimumLineSpacing = 12
+        // 照片是通铺布局：左右几乎不留边，右侧只给滚动条让一点
+        layout.sectionInset = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 10)
         collection.collectionViewLayout = layout
 
         // 行列数变了，每页能装的数量就变了，必须重新切片。

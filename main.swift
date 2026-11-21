@@ -806,6 +806,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
     private let addButton = NSButton(title: "", target: nil, action: nil)
     private let paneTitle = NSTextField(labelWithString: "")
+    /// 顶栏左侧大标题（当前分类名）与副标题（素材数），照 macOS 照片的做法
+    private let headerTitle = NSTextField(labelWithString: "")
+    private let headerSubtitle = NSTextField(labelWithString: "")
     private let paneSubtitle = NSTextField(labelWithString: "")
     /// 壁纸文件详情（只读）：分辨率 / 大小 / 分类 / 位置
     private let fileInfoLabel = NSTextField(labelWithString: "")
@@ -987,7 +990,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
 
 
-        for v in [topBar, sidebar, div1, middle, div2, right, bottomSep, bottomBar] {
+        for v in [sidebar, div1, middle, div2, right, bottomSep, bottomBar, topBar] {
             container.addSubview(v)
         }
 
@@ -1002,9 +1005,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             topBar.heightAnchor.constraint(equalToConstant: 76),
 
             // 左栏：固定 200
-            sidebar.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            // 三栏铺到窗口顶端，顶栏作为浮层叠在上面（照片 App 的做法）
+            sidebar.topAnchor.constraint(equalTo: container.topAnchor),
             sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            sidebar.widthAnchor.constraint(equalToConstant: 200),
+            // 与 macOS 照片一致：260px，长显示器名不再截断
+            sidebar.widthAnchor.constraint(equalToConstant: 260),
             sidebar.bottomAnchor.constraint(equalTo: bottomSep.topAnchor),
 
             div1.topAnchor.constraint(equalTo: sidebar.topAnchor),
@@ -1012,17 +1017,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             div1.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
 
             // 中栏：弹性
-            middle.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            middle.topAnchor.constraint(equalTo: container.topAnchor),
             middle.leadingAnchor.constraint(equalTo: div1.trailingAnchor),
             middle.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
-            middle.widthAnchor.constraint(greaterThanOrEqualToConstant: 380),
+            middle.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
 
             div2.topAnchor.constraint(equalTo: middle.topAnchor),
             div2.leadingAnchor.constraint(equalTo: middle.trailingAnchor),
             div2.bottomAnchor.constraint(equalTo: middle.bottomAnchor),
 
             // 右栏：固定 300
-            right.topAnchor.constraint(equalTo: topBar.bottomAnchor),
+            right.topAnchor.constraint(equalTo: container.topAnchor),
             right.leadingAnchor.constraint(equalTo: div2.trailingAnchor),
             right.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             right.widthAnchor.constraint(equalToConstant: 300),
@@ -1172,17 +1177,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func buildTopBar() -> NSView {
         let bar = NSView()
         bar.translatesAutoresizingMaskIntoConstraints = false
-        // 顶栏：中等层次的毛玻璃（比左右栏实一点，压住视觉重心）
-        _ = addGlass(to: bar, material: .headerView, tint: 0.18)
+        // 顶栏不再铺毛玻璃：macOS 照片的工具条是透明浮层，
+        // 直接叠在内容上，没有独立色块也没有下边线。
+        bar.wantsLayer = true
 
         let icon = NSImageView()
         icon.image = NSApp.applicationIconImage
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.translatesAutoresizingMaskIntoConstraints = false
 
-        let name = NSTextField(labelWithString: "WallLocus")
-        name.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-        name.translatesAutoresizingMaskIntoConstraints = false
+        // 大标题 + 副标题，替代原来的纯品牌名：
+        // 照片 App 的工具条左侧显示「日期 / 张数」，这里显示「分类 / 素材数」。
+        headerTitle.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        headerTitle.lineBreakMode = .byTruncatingTail
+        headerTitle.translatesAutoresizingMaskIntoConstraints = false
+
+        headerSubtitle.font = NSFont.systemFont(ofSize: 11)
+        headerSubtitle.textColor = .secondaryLabelColor
+        headerSubtitle.lineBreakMode = .byTruncatingTail
+        headerSubtitle.translatesAutoresizingMaskIntoConstraints = false
+
+        let nameStack = NSStackView(views: [headerTitle, headerSubtitle])
+        nameStack.orientation = .vertical
+        nameStack.alignment = .leading
+        nameStack.spacing = 1
+        nameStack.translatesAutoresizingMaskIntoConstraints = false
+        let name = nameStack
 
         searchField.placeholderString = L10n.t("top.searchPlaceholder")
         searchField.font = NSFont.systemFont(ofSize: 12)
@@ -1273,7 +1293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         for v in [toolbar, thumbnailGrid, emptyLabel] { pane.addSubview(v) }
 
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: pane.topAnchor, constant: 14),
+            toolbar.topAnchor.constraint(equalTo: pane.topAnchor, constant: 76 + 8),
             toolbar.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 16),
 
             thumbnailGrid.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8),
@@ -1304,7 +1324,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 右侧留 0：滚动条叠在 clip view 上，若 root 还有 16pt 右内边距，
         // 滚动条会被推到离 pane 边缘 18pt 处（实测），与中栏的 3pt 明显不一致。
         // 改成 0 后滚动条贴到与中栏相同的位置，文字与滚动条之间的呼吸由内容自身留白提供。
-        root.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 0)
+        // 顶部留出顶栏高度（76），因为顶栏现在是浮层
+        root.edgeInsets = NSEdgeInsets(top: 76 + 8, left: 16, bottom: 16, right: 0)
         // 不在这里定 translatesAutoresizingMaskIntoConstraints：
         // 右栏的 root 由 syncDetailDocSize 用 frame 摆放，
         // 在 doc.addSubview 处统一设为 true。
@@ -1750,24 +1771,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 规则：先按可用宽度定列数（保证卡片宽度合适），
     /// 再用 ceil(25 / 列数) 反推行数 —— 这样无论窗口多宽多窄，一页永远是 25 个。
     /// 窗口高度不够时会溢出，网格自带滚动条可以往下拉（用户明确要求）。
+    /// 固定 5 列，行数由素材数量决定（照 macOS 照片的网格）。
+    ///
+    /// 图片等高：卡片高度由「可用宽 ÷ 5」按图片比例算出，
+    /// 这样每张缩略图高度一致，扫视时不会参差。
     private func relayoutGridColumns() {
         guard let win = window else { return }
 
-        let middleWidth = win.frame.width - 200 - 2 - 300 - 20
+        let middleWidth = win.frame.width - 260 - 2 - 300 - 8
 
-        // 目标卡片宽度：约 132pt 时观感最好（默认 1100 宽窗口下是 4 列）
-        let targetCardW: CGFloat = 132
-        let cols = max(2, min(8, Int(round(middleWidth / targetCardW))))
-        let rows = Int(ceil(Double(Settings.pageSize) / Double(cols)))
+        // 固定 5 列
+        let cols = 5
 
-        // 卡片尺寸按可用宽度均分（让 FlowLayout 正好排下 cols 个，不会挤进更多）
-        thumbnailGrid.applyCardSize(availableWidth: middleWidth - 24,
-                                     columns: cols)
+        // 先定网格形状，再调卡片尺寸 —— 顺序反了会被 setGrid 重建的 layout
+        // 把 itemSize 覆盖回旧值（实测表现为「算的是 5 列，显示的是 4 列」）。
+        let perPage = min(Settings.pageSize, max(1, filteredLibrary().count))
+        let rows = max(1, Int(ceil(Double(perPage) / Double(cols))))
 
-        guard cols != gridColumns || rows != gridRows else { return }
-        gridColumns = cols
-        gridRows = rows
-        thumbnailGrid.setGrid(columns: cols, rows: rows)
+        if cols != gridColumns || rows != gridRows {
+            gridColumns = cols
+            gridRows = rows
+            thumbnailGrid.setGrid(columns: cols, rows: rows)
+        }
+
+        // 卡片宽 = 可用宽均分（扣掉 pane 内边距与滚动条占位）
+        thumbnailGrid.applyCardSize(availableWidth: middleWidth - 6, columns: cols)
     }
 
     @objc private func searchChanged() {
@@ -2288,7 +2316,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     }
 
+    /// 顶栏标题：当前分类名 + 素材数
+    private func updateHeaderTitle() {
+        let catName: String
+        if let cat = libraryFilter {
+            catName = cat
+        } else {
+            catName = L10n.t("nav.libraryAll")
+        }
+        headerTitle.stringValue = catName
+
+        let count = filteredLibrary().count
+        headerSubtitle.stringValue = L10n.t("header.count", count)
+    }
+
     private func refreshControls() {
+        updateHeaderTitle()
         loadPresetButton.isHidden = true
         loadPresetButton.isEnabled = false
         guard let item = selectedItem else {

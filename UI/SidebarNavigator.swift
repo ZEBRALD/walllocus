@@ -98,9 +98,12 @@ final class SidebarNavigator: NSView {
         outline.headerView = nil
         outline.backgroundColor = .clear
         outline.style = .sourceList
+        // 照片 App 的选中态是「圆角胶囊包住内容」，不是整行铺满。
+        // sourceList 样式会铺满整行，这里改用 inset 的普通高亮。
+        outline.selectionHighlightStyle = .regular
         outline.rowSizeStyle = .default
         outline.floatsGroupRows = false
-        outline.indentationPerLevel = 12
+        outline.indentationPerLevel = 14
         outline.dataSource = self
         outline.delegate = self
         outline.target = self
@@ -143,7 +146,9 @@ final class SidebarNavigator: NSView {
         addSubview(scroll)
 
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: topAnchor),
+            // scroll 从顶栏下方开始：这样列表第一行不会被浮层压住，
+            // 而左栏的毛玻璃背景由外层视图负责铺满到窗口顶端。
+            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 76 + 10),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -321,7 +326,7 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
     func outlineView(_ ov: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         guard let node = item as? Node else { return 26 }
         switch node.kind {
-        case .group: return 22
+        case .group: return 26
         case .preset: return 62      // 预设卡片要给叠图留高度
         default: return 30
         }
@@ -340,12 +345,13 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
                 label = NSTextField(labelWithString: "")
                 label.identifier = id
                 label.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-                label.textColor = .secondaryLabelColor
+                label.textColor = .tertiaryLabelColor
             }
+            // macOS 照片的分组标题是小号灰字，不做大写转换
             switch which {
-            case "library": label.stringValue = L10n.t("nav.library").uppercased()
-            case "preset":  label.stringValue = L10n.t("nav.presets").uppercased()
-            default:        label.stringValue = L10n.t("nav.displays").uppercased()
+            case "library": label.stringValue = L10n.t("nav.library")
+            case "preset":  label.stringValue = L10n.t("nav.presets")
+            default:        label.stringValue = L10n.t("nav.displays")
             }
             return label
 
