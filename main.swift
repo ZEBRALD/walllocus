@@ -948,12 +948,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         bottomSep.boxType = .separator
         bottomSep.translatesAutoresizingMaskIntoConstraints = false
 
-        // 顶栏与内容区之间也补一条：两者都是毛玻璃，没有界线会糊成一片
-        let topSep = NSBox()
-        topSep.boxType = .separator
-        topSep.translatesAutoresizingMaskIntoConstraints = false
 
-        for v in [topBar, topSep, sidebar, div1, middle, div2, right, bottomSep, bottomBar] {
+
+        for v in [topBar, sidebar, div1, middle, div2, right, bottomSep, bottomBar] {
             container.addSubview(v)
         }
 
@@ -967,13 +964,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             topBar.heightAnchor.constraint(equalToConstant: 76),
 
-            // 顶栏下边线
-            topSep.topAnchor.constraint(equalTo: topBar.bottomAnchor),
-            topSep.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            topSep.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-
             // 左栏：固定 200
-            sidebar.topAnchor.constraint(equalTo: topSep.bottomAnchor),
+            sidebar.topAnchor.constraint(equalTo: topBar.bottomAnchor),
             sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             sidebar.widthAnchor.constraint(equalToConstant: 200),
             sidebar.bottomAnchor.constraint(equalTo: bottomSep.topAnchor),
@@ -984,7 +976,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             div1.widthAnchor.constraint(equalToConstant: 1),
 
             // 中栏：弹性
-            middle.topAnchor.constraint(equalTo: topSep.bottomAnchor),
+            middle.topAnchor.constraint(equalTo: topBar.bottomAnchor),
             middle.leadingAnchor.constraint(equalTo: div1.trailingAnchor),
             middle.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
             middle.widthAnchor.constraint(greaterThanOrEqualToConstant: 380),
@@ -995,7 +987,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             div2.widthAnchor.constraint(equalToConstant: 1),
 
             // 右栏：固定 300
-            right.topAnchor.constraint(equalTo: topSep.bottomAnchor),
+            right.topAnchor.constraint(equalTo: topBar.bottomAnchor),
             right.leadingAnchor.constraint(equalTo: div2.trailingAnchor),
             right.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             right.widthAnchor.constraint(equalToConstant: 300),

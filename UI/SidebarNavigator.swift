@@ -106,7 +106,16 @@ final class SidebarNavigator: NSView {
 
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
+        // 与系统其它 App 一致：滚动时浮现、停手后淡出。
+        // 之前只设了 hasVerticalScroller，缺少这两项，滚动条不会按 overlay 方式出现。
+        scroll.scrollerStyle = .overlay
+        scroll.autohidesScrollers = true
+        scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.verticalScrollElasticity = .allowed
+        // 内容高度不够时不强行撑高，也不让 outline 被压缩
+        outline.autoresizingMask = [.width]
         scroll.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scroll)
 
@@ -138,6 +147,10 @@ final class SidebarNavigator: NSView {
         outline.reloadData()
         // 分组默认展开
         for root in roots { outline.expandItem(root) }
+        // 让 NSScrollView 重新计算可滚区域：
+        // 预设/显示器数量变化后，若不刷新，滚动条可能不出现或长度不对。
+        outline.sizeLastColumnToFit()
+        scroll.reflectScrolledClipView(scroll.contentView)
         select(selection, notify: false)
     }
 
