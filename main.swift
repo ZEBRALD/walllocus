@@ -1331,6 +1331,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         guard let p = state.presets.first(where: { $0.id == presetID }) else { return }
         paneTitle.stringValue = p.name
         paneSubtitle.stringValue = L10n.t("detail.presetSummary", p.displayCount)
+        // 预设没有单一素材，取它里面第一张能用的来预览，
+        // 让用户能看到「这套预设大概长什么样」。
+        let cover = p.assignment.values.first { path in state.library.contains { $0.path == path } }
+            ?? p.assignment.values.first
+        previewPane.show(path: cover, fallbackText: L10n.t("preview.noImage"))
         adjustControlsEnabled(false)
         assignButton.isEnabled = false
         removeButton.isEnabled = false
@@ -1744,6 +1749,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             nameField.isEnabled = false
             paneTitle.stringValue = L10n.t("win.scope.none")
             paneSubtitle.stringValue = ""
+            previewPane.show(path: nil, fallbackText: L10n.t("preview.noSelection"))
             adjustControlsEnabled(false)
             refreshStopButton()
             refreshPresetButtons()
@@ -1784,6 +1790,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             paneTitle.stringValue = scopeName
             paneSubtitle.stringValue = item.displayName
         }
+        // 右栏大图预览：此前只更新了标题与副标题，从未调用 previewPane.show，
+        // 所以选中素材时预览区一直空白（用户反馈的 bug）。
+        previewPane.show(path: item.path, fallbackText: L10n.t("preview.noImage"))
         loadPresetButton.isHidden = true
         loadPresetButton.isEnabled = false
 
