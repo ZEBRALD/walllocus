@@ -122,9 +122,7 @@ final class SidebarNavigator: NSView {
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            // 越过右边缘 3pt：overlay 滚动条自身有内缩，
-            // 只贴到视图边界时滑块离分隔线还剩几 pt，看起来「浮在列表旁边」。
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 3),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }

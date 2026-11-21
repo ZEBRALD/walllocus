@@ -1222,10 +1222,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
             thumbnailGrid.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8),
             thumbnailGrid.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 16),
-            // 右边缘越过分割线 4pt：overlay 滚动条本身有内缩，
-            // 只贴到 pane 边缘时滑块离分割线还差 6pt，看起来「浮在缩略图旁边」。
-            // 稍微外扩让滑块的中心线正好压在分隔线内侧。
-            thumbnailGrid.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: 7),
+            // 与右栏保持一致：内容自然贴边、不做外扩，
+            // 滚动条到边缘的距离交给 AppKit 的 overlay 默认表现。
+            thumbnailGrid.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
             thumbnailGrid.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
 
             emptyLabel.centerXAnchor.constraint(equalTo: pane.centerXAnchor),
