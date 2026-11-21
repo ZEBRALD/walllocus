@@ -1081,6 +1081,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         return v
     }
 
+    /// 让输入框符合本 App 的圆角语言。
+    ///
+    /// AppKit 的 .roundedBezel 在大尺寸下仍然是「方角 + 内嵌阴影」，
+    /// 和其余全部圆角的界面不搭。这里关掉 bezel、自绘圆角背景 +
+    /// 1pt 描边，并在获得焦点时把描边换成强调色。
+    private func styleRoundedField(_ field: NSTextField, inset: CGFloat = 6) {
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.wantsLayer = true
+        field.layer?.cornerRadius = 7
+        field.layer?.borderWidth = 1
+        field.layer?.borderColor = NSColor(white: 1, alpha: 0.10).cgColor
+        field.layer?.backgroundColor = NSColor(white: 1, alpha: 0.05).cgColor
+        // 文本左右留白，否则会贴到圆角边上
+        field.cell?.sendsActionOnEndEditing = true
+    }
+
     // MARK: 顶栏
 
     private func buildTopBar() -> NSView {
@@ -1119,6 +1137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 左边距 16：与右侧对称，也给红绿灯留出同等呼吸空间
             icon.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
             // 垂直位置：红绿灯占顶部 26，剩余 50 高的内容区内居中
+            // logo 垂直中心 = 红绿灯区(26) + 内容带一半(25) = y 51
             icon.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 26 + 25),
             icon.widthAnchor.constraint(equalToConstant: 26),
             icon.heightAnchor.constraint(equalToConstant: 26),
@@ -1129,11 +1148,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
             settingsButton.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
             settingsButton.widthAnchor.constraint(equalToConstant: 30),
+            settingsButton.heightAnchor.constraint(equalToConstant: 28),
 
             searchField.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
             searchField.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
             searchField.widthAnchor.constraint(equalToConstant: 240),
-            searchField.heightAnchor.constraint(equalToConstant: 24),
+            // 与齿轮同高，视觉上三者（logo/搜索/齿轮）在同一条水平线上
+            searchField.heightAnchor.constraint(equalToConstant: 28),
         ])
         return bar
     }
@@ -1242,9 +1263,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         root.addArrangedSubview(nameLabel)
 
         nameField.isEditable = true
-        nameField.isBordered = true
-        nameField.bezelStyle = .roundedBezel
         nameField.font = NSFont.systemFont(ofSize: 12)
+        styleRoundedField(nameField)
         nameField.placeholderString = L10n.t("win.namePlaceholder")
         nameField.target = self
         nameField.action = #selector(nameFieldCommitted(_:))
@@ -1414,9 +1434,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         value.isEditable = true
         value.isSelectable = true
-        value.isBordered = true
-        value.bezelStyle = .roundedBezel
         value.alignment = .right
+        styleRoundedField(value)
         value.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         value.target = self
         value.action = #selector(numberFieldCommitted(_:))
@@ -1515,21 +1534,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         reloadLibrary()
     }
 
-    /// 过滤图库：匹配自定义名称、文件名，也匹配预设名（用户要求「改了预设名搜素材名也能搜出来」）
+    /// 过滤图库：只匹配素材名（自定义名称 + 原始文件名）。
+    /// 不匹配预设名 —— 搜索框在顶栏、语义是「找这张壁纸」，
+    /// 若把预设名也算进来，输入内容与结果对不上，反而让人困惑。
     private func filteredLibrary() -> [LibraryItem] {
         guard !searchQuery.isEmpty else { return state.library }
         let q = searchQuery.lowercased()
-
-        // 预设名命中的素材也要留下
-        var viaPreset: Set<String> = []
-        for p in state.presets where p.name.lowercased().contains(q) {
-            viaPreset.formUnion(p.assignment.values)
-        }
-
         return state.library.filter { item in
             item.displayName.lowercased().contains(q)
                 || item.name.lowercased().contains(q)
-                || viaPreset.contains(item.path)
         }
     }
 
@@ -1732,9 +1745,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 数值框：可编辑，回车或失焦时提交
         value.isEditable = true
         value.isSelectable = true
-        value.isBordered = true
-        value.bezelStyle = .roundedBezel
         value.alignment = .right
+        styleRoundedField(value)
         value.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         value.target = self
         value.action = #selector(numberFieldCommitted(_:))
