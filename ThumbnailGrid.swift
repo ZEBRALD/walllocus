@@ -289,7 +289,8 @@ final class ThumbnailGrid: NSView {
 
             pager.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
             pager.centerXAnchor.constraint(equalTo: centerXAnchor),
-            pager.bottomAnchor.constraint(equalTo: bottomAnchor),
+            // 贴底太挤，留一点呼吸空间（用户反馈「切页按钮太靠下」）
+            pager.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
 
             collection.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             collection.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),

@@ -761,6 +761,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let paneTitle = NSTextField(labelWithString: "")
     private let paneSubtitle = NSTextField(labelWithString: "")
     private var libraryEmptyLabel: NSTextField?
+    /// 右栏顶部的当前素材大图预览
+    private let previewPane = PreviewPane(frame: .zero)
     /// 侧栏当前选中项；nil 表示还没选
     private var sidebarSelection: SidebarSelection = .allDisplays
     /// 搜索过滤词（空 = 不过滤）
@@ -1118,6 +1120,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         paneSubtitle.translatesAutoresizingMaskIntoConstraints = false
         paneSubtitle.widthAnchor.constraint(equalToConstant: 270).isActive = true
         root.addArrangedSubview(paneSubtitle)
+
+        // 当前素材的大图预览：给"选中了什么"一个明确的视觉锚点
+        previewPane.translatesAutoresizingMaskIntoConstraints = false
+        previewPane.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        previewPane.heightAnchor.constraint(equalToConstant: 150).isActive = true
+        root.addArrangedSubview(previewPane)
 
         root.addArrangedSubview(separator(width: 270))
 
@@ -2127,6 +2135,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             }
         }
         refreshPresetButtons()
+        // 三栏改版后预设显示在左侧导航里；这里不同步侧栏的话，
+        // 保存成功的预设只会进数据，界面上看不到（实测就是这个 bug）。
+        sidebar.reload(presets: state.presets,
+                       screens: screens,
+                       selection: sidebarSelection)
     }
 
     private func refreshPresetButtons() {
@@ -2169,7 +2182,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             st.presets.removeAll { $0.name == trimmed }
             st.presets.append(preset)
         }
+        // 保存后直接把新预设选中，用户能立刻在侧栏看到它并查看详情
+        sidebarSelection = .preset(preset.id)
         reloadPresets(select: preset.id)
+        showPresetDetail(presetID: preset.id)
         flashStatus(L10n.t("preset.saved", trimmed, preset.displayCount))
     }
 
