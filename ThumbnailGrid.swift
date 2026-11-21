@@ -479,7 +479,7 @@ final class ThumbnailGrid: NSView {
 
     private func updatePager() {
         let total = pageCount
-        pageLabel.stringValue = "\(page + 1) / \(total)   (\(allItems.count) 项)"
+        pageLabel.stringValue = L10n.t("pager.summary", page + 1, total, allItems.count)
         prevButton.isEnabled = page > 0
         nextButton.isEnabled = page < total - 1
         // 只有一页时把整条分页器隐藏，避免占地方

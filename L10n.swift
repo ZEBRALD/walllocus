@@ -7,10 +7,27 @@ import Foundation
 
 enum L10n {
     /// 是否使用中文界面
-    static let isChinese: Bool = {
-        let lang = Locale.preferredLanguages.first ?? "en"
-        return lang.hasPrefix("zh")
-    }()
+    /// 语言偏好：跟随系统 / 强制中文 / 强制英文
+    enum Language: String, CaseIterable {
+        case system, chinese, english
+    }
+
+    static var language: Language {
+        let raw = UserDefaults.standard.string(forKey: "uiLanguage") ?? ""
+        return Language(rawValue: raw) ?? .system
+    }
+
+    static var isChinese: Bool {
+        switch language {
+        case .chinese:
+            return true
+        case .english:
+            return false
+        case .system:
+            let lang = Locale.preferredLanguages.first ?? "en"
+            return lang.hasPrefix("zh")
+        }
+    }
 
     /// 取本地化字符串；中文表缺失的键回退到英文，再回退到键本身
     static func t(_ key: String) -> String {
@@ -29,6 +46,7 @@ enum L10n {
         "nav.allDisplays": "All displays (sync)",
         "nav.displayCount": "%d display(s)",
         "top.searchPlaceholder": "Search wallpaper name",
+        "pager.summary": "%d / %d   (%d items)",
         "top.settings": "Settings",
         "detail.framing": "Framing",
         "detail.actions": "Actions",
@@ -41,6 +59,12 @@ enum L10n {
         "preset.saveCurrent": "Save current as preset",
         "menu.openAppFolder": "Show WallLocus in Finder",
         "setting.library": "Library",
+        "setting.language": "Language",
+        "setting.language.system": "Follow system",
+        "setting.language.chinese": "Chinese",
+        "setting.language.english": "English",
+        "setting.language.changed": "Language changed",
+        "setting.language.restartHint": "Restart WallLocus to apply the new language.",
         "setting.pageSize": "Items per page",
         "setting.pageSize.value": "%d items",
         "setting.pageSize.custom": "Custom\u{2026}",
@@ -66,6 +90,14 @@ enum L10n {
         "win.setWallpaper": "Set as wallpaper",
         "win.removeFromLibrary": "Remove from library",
         "win.stopAll": "Stop all wallpapers",
+        "win.clearCurrentDisplay": "Remove wallpaper on this display",
+        "win.clearAllDisplays": "Remove wallpapers on all displays",
+        "confirm.clearAllTitle": "Remove wallpapers from all %d display(s)?",
+        "confirm.clearAllBody": "This clears every display at once and cannot be undone. Use Stop all wallpapers instead if you may want them back.",
+        "confirm.clearAllConfirm": "Remove all",
+        "status.noWallpaperOnDisplay": "No wallpaper on this display",
+        "status.clearedDisplay": "Removed wallpaper from %d display(s)",
+        "status.clearedAll": "Removed wallpapers from %d display(s)",
         "win.restoreAll": "Restore wallpapers",
         "preset.label": "Presets",
         "preset.empty": "(no presets yet)",
@@ -159,16 +191,25 @@ enum L10n {
         "nav.allDisplays": "全部显示器（同步）",
         "nav.displayCount": "%d 块屏",
         "top.searchPlaceholder": "搜索壁纸文件名",
+        "pager.summary": "%d / %d   （%d 项）",
         "top.settings": "设置",
         "detail.framing": "构图",
         "detail.actions": "操作",
         "preview.noImage": "暂无预览",
         "preview.noSelection": "选中一个素材以查看预览",
         "detail.presetSummary": "预设 · %d 块屏",
+        "detail.using": "正在使用：%@",
+        "detail.notUsing": "尚未分配壁纸",
         "library.emptyHint": "把图片或视频拖到这里，或点「添加文件…」",
         "preset.saveCurrent": "保存当前为预设",
         "menu.openAppFolder": "在访达中显示 WallLocus",
         "setting.library": "壁纸库",
+        "setting.language": "语言",
+        "setting.language.system": "跟随系统",
+        "setting.language.chinese": "中文",
+        "setting.language.english": "English",
+        "setting.language.changed": "语言已切换",
+        "setting.language.restartHint": "重启 WallLocus 后生效。",
         "setting.pageSize": "每页数量",
         "setting.pageSize.value": "%d 个",
         "setting.pageSize.custom": "自定义…",
@@ -194,6 +235,14 @@ enum L10n {
         "win.setWallpaper": "设为该屏壁纸",
         "win.removeFromLibrary": "从库移除",
         "win.stopAll": "停止全部壁纸",
+        "win.clearCurrentDisplay": "移除当前显示器的壁纸",
+        "win.clearAllDisplays": "移除所有显示器的壁纸",
+        "confirm.clearAllTitle": "确定移除全部 %d 块显示器上的壁纸？",
+        "confirm.clearAllBody": "这会一次清空所有屏幕，且无法撤销。若还想恢复，请改用「停止全部壁纸」。",
+        "confirm.clearAllConfirm": "全部移除",
+        "status.noWallpaperOnDisplay": "这块显示器上没有壁纸",
+        "status.clearedDisplay": "已移除 %d 块显示器上的壁纸",
+        "status.clearedAll": "已移除全部 %d 块显示器上的壁纸",
         "win.restoreAll": "还原壁纸",
         "preset.label": "预设",
         "preset.empty": "（还没有预设）",

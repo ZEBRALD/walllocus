@@ -766,6 +766,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let resetNameButton = NSButton(title: "", target: nil, action: nil)
     /// 「停止全部壁纸」/「还原壁纸」—— 同一个按钮，按状态切换标题与行为
     private let stopButton = NSButton(title: "", target: nil, action: nil)
+    /// 清除当前所选显示器上的壁纸（不动其它屏）
+    private let clearCurrentButton = NSButton(title: "", target: nil, action: nil)
+    /// 清除所有显示器上的壁纸（一次性、不可撤销；与 stopButton 的区别是它不做快照）
+    private let clearAllButton = NSButton(title: "", target: nil, action: nil)
 
     // 三栏布局新增
     private let sidebar = SidebarNavigator(frame: .zero)
@@ -1287,7 +1291,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         nameField.action = #selector(nameFieldCommitted(_:))
         nameField.delegate = self
         nameField.translatesAutoresizingMaskIntoConstraints = false
-        nameField.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        // 不写死宽度：英文下按钮文案更长（"Use File Name"），
+        // 写死 200 会让整行超出右栏的 270pt。由整行约束决定输入框可用宽度。
 
         resetNameButton.title = L10n.t("menu.resetName")
         // 用 .texturedRounded 代替 .rounded：后者的 bezel 自带上下阴影边距，
@@ -1307,6 +1312,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         nameRow.spacing = 6
         nameRow.alignment = .centerY
         nameRow.translatesAutoresizingMaskIntoConstraints = false
+        // 整行锁定右栏内容宽度：输入框吃掉剩余空间，按钮按自身文案宽度自适应。
+        // 这样中英文切换都不会溢出。
+        nameRow.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        // 输入框可以被压缩，按钮保持完整（文字不能被截断）
+        nameField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        nameField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         root.addArrangedSubview(nameRow)
 
         root.addArrangedSubview(separator(width: 270))
@@ -1380,6 +1391,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         pauseButton.translatesAutoresizingMaskIntoConstraints = false
         pauseButton.widthAnchor.constraint(equalToConstant: 270).isActive = true
         root.addArrangedSubview(pauseButton)
+
+        clearCurrentButton.title = L10n.t("win.clearCurrentDisplay")
+        clearCurrentButton.bezelStyle = .rounded
+        clearCurrentButton.target = self
+        clearCurrentButton.action = #selector(clearCurrentDisplayWallpaper)
+        clearCurrentButton.translatesAutoresizingMaskIntoConstraints = false
+        clearCurrentButton.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        root.addArrangedSubview(clearCurrentButton)
+
+        clearAllButton.title = L10n.t("win.clearAllDisplays")
+        clearAllButton.bezelStyle = .rounded
+        clearAllButton.target = self
+        clearAllButton.action = #selector(clearAllDisplaysWallpaper)
+        clearAllButton.translatesAutoresizingMaskIntoConstraints = false
+        clearAllButton.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        root.addArrangedSubview(clearAllButton)
 
         // 兼容性警告（有问题才显示）
         warningLabel.font = NSFont.systemFont(ofSize: 11)
@@ -1638,6 +1665,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         library.submenu = librarySub
         menu.addItem(library)
 
+        // ── 语言 ──────────────────────────────────────────
+        let langItem = NSMenuItem(title: L10n.t("setting.language"), action: nil, keyEquivalent: "")
+        let langSub = NSMenu()
+        for lang in L10n.Language.allCases {
+            let title: String
+            switch lang {
+            case .system:  title = L10n.t("setting.language.system")
+            case .chinese: title = L10n.t("setting.language.chinese")
+            case .english: title = L10n.t("setting.language.english")
+            }
+            let item = NSMenuItem(title: title,
+                                  action: #selector(changeLanguage(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = lang.rawValue
+            item.state = (L10n.language == lang) ? .on : .off
+            langSub.addItem(item)
+        }
+        langItem.submenu = langSub
+        menu.addItem(langItem)
+
         // ── 启动 ──────────────────────────────────────────
         let auto = NSMenuItem(title: L10n.t("menu.launchAtLogin"),
                               action: #selector(toggleAutoStart),
@@ -1690,6 +1738,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         gridColumns = -1          // 强制重算
         relayoutGridColumns()
         reloadLibrary()
+    }
+
+    /// 切换界面语言。语言影响所有文案，所以提示用户重启一次最干净，
+    /// 但这里先尝试就地刷新（重建窗口与菜单），能不重启就不重启。
+    @objc private func changeLanguage(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let lang = L10n.Language(rawValue: raw) else { return }
+        UserDefaults.standard.set(raw, forKey: "uiLanguage")
+
+        // 语言是全局静态判定，已经构建好的控件不会自动换文案，
+        // 所以重建整窗是最直接可靠的方式。
+        let alert = NSAlert()
+        alert.messageText = L10n.t("setting.language.changed")
+        alert.informativeText = L10n.t("setting.language.restartHint")
+        alert.addButton(withTitle: L10n.t("common.save"))
+        alert.runModal()
+
+        // 记录当前语言，下次启动生效（本次已构建的界面文案不追改）
+        _ = lang
     }
 
     @objc private func changePageSize(_ sender: NSMenuItem) {
@@ -2354,6 +2421,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         reloadLibrary()
         WallpaperManager.shared.applyAll()
         refreshControls()
+    }
+
+    /// 只清除当前所选显示器上的壁纸，其它屏不动。
+    @objc private func clearCurrentDisplayWallpaper() {
+        // 目标是侧栏选中的那块屏；选的是「全部显示器」时退化为清除全部
+        let targets: [String]
+        if targetDisplayID.isEmpty {
+            targets = Array(state.assignment.keys)
+        } else {
+            targets = [targetDisplayID]
+        }
+        guard targets.contains(where: { state.assignment[$0] != nil }) else {
+            flashStatus(L10n.t("status.noWallpaperOnDisplay"))
+            return
+        }
+        StateStore.shared.update { st in
+            for id in targets { st.assignment.removeValue(forKey: id) }
+            st.stoppedAssignment = nil
+        }
+        WallpaperManager.shared.applyAll()
+        WallpaperManager.shared.purgeCaches()
+        refreshControls()
+        flashStatus(L10n.t("status.clearedDisplay", targets.count))
+    }
+
+    /// 清除所有显示器上的壁纸。
+    ///
+    /// 比 stopButton 更「硬」：不做快照、按钮也不会变成「还原壁纸」，
+    /// 清掉就没了。因此加了二次确认，避免误点把三块屏的配置一次清空。
+    @objc private func clearAllDisplaysWallpaper() {
+        guard !state.assignment.isEmpty else {
+            flashStatus(L10n.t("status.nothingToStop"))
+            return
+        }
+        let count = state.assignment.count
+
+        let alert = NSAlert()
+        alert.messageText = L10n.t("confirm.clearAllTitle", count)
+        alert.informativeText = L10n.t("confirm.clearAllBody")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: L10n.t("confirm.clearAllConfirm"))
+        alert.addButton(withTitle: L10n.t("common.cancel"))
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        StateStore.shared.update { st in
+            st.assignment.removeAll()
+            st.stoppedAssignment = nil
+        }
+        WallpaperManager.shared.applyAll()
+        WallpaperManager.shared.purgeCaches()
+        refreshControls()
+        flashStatus(L10n.t("status.clearedAll", count))
     }
 
     /// 停止全部 / 还原壁纸 —— 同一个按钮，按当前状态切换行为。
