@@ -301,6 +301,30 @@ enum Settings {
     /// 备选档位
     static let pageSizeOptions = [15, 20, 25, 30, 40, 50]
 
+    /// 壁纸文件存放目录。首次使用时默认 ~/Pictures/WallLocus，
+    /// 用户也可以改成任意目录。新添加的素材会被复制到这里集中管理。
+    static var wallpaperFolder: URL {
+        get {
+            let d = UserDefaults.standard
+            if let s = d.string(forKey: "wallpaperFolder"), !s.isEmpty {
+                return URL(fileURLWithPath: s, isDirectory: true)
+            }
+            let base = FileManager.default.urls(for: .picturesDirectory,
+                                                in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSHomeDirectory() + "/Pictures")
+            return base.appendingPathComponent("WallLocus", isDirectory: true)
+        }
+        set {
+            UserDefaults.standard.set(newValue.path, forKey: "wallpaperFolder")
+        }
+    }
+
+    /// 用户是否已经确认过文件夹位置（首次启动时用来决定要不要弹引导）
+    static var hasChosenWallpaperFolder: Bool {
+        get { UserDefaults.standard.bool(forKey: "hasChosenWallpaperFolder") }
+        set { UserDefaults.standard.set(newValue, forKey: "hasChosenWallpaperFolder") }
+    }
+
     // 关窗后隐藏 Dock 图标：固定行为，不提供开关
 }
 
@@ -780,6 +804,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let addButton = NSButton(title: "", target: nil, action: nil)
     private let paneTitle = NSTextField(labelWithString: "")
     private let paneSubtitle = NSTextField(labelWithString: "")
+    /// 壁纸文件详情（只读）：分辨率 / 大小 / 分类 / 位置
+    private let fileInfoLabel = NSTextField(labelWithString: "")
     private var libraryEmptyLabel: NSTextField?
     /// 右栏顶部的当前素材大图预览
     private let previewPane = PreviewPane(frame: .zero)
@@ -859,6 +885,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         buildStatusItem()
         startFullscreenMonitor()
         reloadScreens()
+        // 首次使用时确认壁纸文件夹位置。
+        // 放在窗口建好之后：这样弹窗有父窗口可依附，不会飘在桌面中央。
+        ensureWallpaperFolder()
         reloadLibrary()
         reloadPresets()
         WallpaperManager.shared.applyAll()
@@ -1334,6 +1363,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         nameField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         root.addArrangedSubview(nameRow)
 
+        // 壁纸文件详情：文件名 / 分辨率 / 大小 / 分类 / 位置。
+        // 这些是只读信息，用多行标签呈现，不占额外的行高。
+        let infoTitle = NSTextField(labelWithString: L10n.t("detail.fileInfo"))
+        infoTitle.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        infoTitle.textColor = .secondaryLabelColor
+        root.addArrangedSubview(infoTitle)
+
+        fileInfoLabel.font = NSFont.systemFont(ofSize: 10.5)
+        fileInfoLabel.textColor = .secondaryLabelColor
+        fileInfoLabel.lineBreakMode = .byTruncatingMiddle
+        fileInfoLabel.maximumNumberOfLines = 5
+        fileInfoLabel.cell?.wraps = true
+        fileInfoLabel.preferredMaxLayoutWidth = 270
+        fileInfoLabel.translatesAutoresizingMaskIntoConstraints = false
+        fileInfoLabel.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        root.addArrangedSubview(fileInfoLabel)
+
         root.addArrangedSubview(separator(width: 270))
 
         // 构图
@@ -1374,6 +1420,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         opTitle.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         opTitle.textColor = .secondaryLabelColor
         root.addArrangedSubview(opTitle)
+
+        // 预设的「加载」按钮。此前只在 showPresetDetail 里设了 isHidden=false，
+        // 但这个按钮从未被加入视图层级，所以永远不会出现 —— 预设无法应用的根因。
+        loadPresetButton.title = L10n.t("preset.load")
+        loadPresetButton.bezelStyle = .rounded
+        loadPresetButton.target = self
+        loadPresetButton.action = #selector(loadSelectedPresetFromButton)
+        loadPresetButton.translatesAutoresizingMaskIntoConstraints = false
+        loadPresetButton.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        loadPresetButton.isHidden = true
+        root.addArrangedSubview(loadPresetButton)
 
         assignButton.title = L10n.t("win.setWallpaper")
         assignButton.bezelStyle = .rounded
@@ -1549,6 +1606,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 选中预设时，右栏显示它的摘要与「加载」按钮；不自动应用
+    /// 填充右栏的文件详情：文件名 / 分辨率 / 大小 / 分类 / 位置。
+    /// 分辨率要从文件里读（图片走 ImageIO，视频走 AVAsset），
+    /// 异步取，避免选中大文件时卡住主线程。
+    private func updateFileInfo(for item: LibraryItem?) {
+        guard let item else {
+            fileInfoLabel.stringValue = ""
+            return
+        }
+        let path = item.path
+        let fm = FileManager.default
+        let attrs = try? fm.attributesOfItem(atPath: path)
+        let bytes = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        let exists = fm.fileExists(atPath: path)
+
+        // 文件名 / 分类 / 大小 / 位置 —— 这些都是同步就能拿到的
+        let kind = item.kind == .video ? L10n.t("kind.video") : L10n.t("kind.image")
+        let sizeText: String
+        if !exists {
+            sizeText = L10n.t("detail.fileMissing")
+        } else if bytes >= 1024 * 1024 {
+            sizeText = String(format: "%.1f MB", Double(bytes) / (1024 * 1024))
+        } else {
+            sizeText = String(format: "%.0f KB", Double(bytes) / 1024)
+        }
+
+        // 位置：相对壁纸文件夹显示，超长时中间截断
+        let folder = Settings.wallpaperFolder.standardizedFileURL.path
+        let full = URL(fileURLWithPath: path).standardizedFileURL.path
+        let loc: String
+        if full.hasPrefix(folder + "/") {
+            loc = String(full.dropFirst(folder.count + 1))
+        } else {
+            loc = full
+        }
+
+        func compose(_ resolution: String) -> String {
+            let lines = [
+                L10n.t("detail.fileName", (path as NSString).lastPathComponent),
+                L10n.t("detail.resolution", resolution),
+                L10n.t("detail.fileSize", sizeText),
+                L10n.t("detail.fileKind", kind),
+                L10n.t("detail.fileLocation", loc),
+            ]
+            return lines.joined(separator: "\n")
+        }
+
+        // 先填一份「不含分辨率」的，避免切换时闪空白
+        fileInfoLabel.stringValue = compose("—")
+
+        guard exists else { return }
+
+        // 异步取分辨率
+        let path2 = path
+        let isVideo = item.kind == .video
+        DispatchQueue.global(qos: .userInitiated).async {
+            var res = "—"
+            if isVideo {
+                let asset = AVURLAsset(url: URL(fileURLWithPath: path2))
+                let sem = DispatchSemaphore(value: 0)
+                var size: CGSize = .zero
+                Task {
+                    if let track = try? await asset.loadTracks(withMediaType: .video).first,
+                       let s = try? await track.load(.naturalSize),
+                       let t = try? await track.load(.preferredTransform) {
+                        size = s.applying(t)
+                        size = CGSize(width: abs(size.width), height: abs(size.height))
+                    }
+                    sem.signal()
+                }
+                sem.wait()
+                if size.width > 0 {
+                    res = String(format: "%d×%d", Int(size.width), Int(size.height))
+                }
+            } else if let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path2) as CFURL, nil),
+                      let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+                      let w = props[kCGImagePropertyPixelWidth] as? Int,
+                      let h = props[kCGImagePropertyPixelHeight] as? Int {
+                res = String(format: "%d×%d", w, h)
+            }
+
+            let finalRes = res
+            DispatchQueue.main.async { [weak self] in
+                // 选中项可能已经变了，只有还是同一路径时才写入
+                guard let self, self.selectedItem?.path == path2 else { return }
+                self.fileInfoLabel.stringValue = compose(finalRes)
+            }
+        }
+    }
+
     private func showPresetDetail(presetID: String) {
         guard let p = state.presets.first(where: { $0.id == presetID }) else { return }
         paneTitle.stringValue = p.name
@@ -1558,6 +1704,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let cover = p.assignment.values.first { path in state.library.contains { $0.path == path } }
             ?? p.assignment.values.first
         previewPane.show(path: cover, fallbackText: L10n.t("preview.noImage"))
+        updateFileInfo(for: nil)
         adjustControlsEnabled(false)
         assignButton.isEnabled = false
         removeButton.isEnabled = false
@@ -2089,6 +2236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             paneTitle.stringValue = L10n.t("win.scope.none")
             paneSubtitle.stringValue = ""
             previewPane.show(path: nil, fallbackText: L10n.t("preview.noSelection"))
+            updateFileInfo(for: nil)
             adjustControlsEnabled(false)
             refreshStopButton()
             refreshPresetButtons()
@@ -2132,6 +2280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 右栏大图预览：此前只更新了标题与副标题，从未调用 previewPane.show，
         // 所以选中素材时预览区一直空白（用户反馈的 bug）。
         previewPane.show(path: item.path, fallbackText: L10n.t("preview.noImage"))
+        updateFileInfo(for: item)
         loadPresetButton.isHidden = true
         loadPresetButton.isEnabled = false
 
@@ -2334,6 +2483,89 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         updateStatus()
     }
 
+    /// 首次启动时确认壁纸文件夹位置。
+    /// 默认 ~/Pictures/WallLocus，用户可以直接用默认值，也可以另选目录。
+    private func ensureWallpaperFolder() {
+        guard !Settings.hasChosenWallpaperFolder else {
+            // 已确认过：确保目录存在即可
+            try? FileManager.default.createDirectory(at: Settings.wallpaperFolder,
+                                                     withIntermediateDirectories: true)
+            return
+        }
+
+        let folder = Settings.wallpaperFolder
+        let alert = NSAlert()
+        alert.messageText = L10n.t("folder.firstRunTitle")
+        alert.informativeText = L10n.t("folder.firstRunBody", folder.path)
+        alert.addButton(withTitle: L10n.t("folder.useDefault"))
+        alert.addButton(withTitle: L10n.t("folder.chooseOther"))
+        alert.addButton(withTitle: L10n.t("common.cancel"))
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            Settings.wallpaperFolder = folder
+        case .alertSecondButtonReturn:
+            if let picked = pickFolder(startingAt: folder) {
+                Settings.wallpaperFolder = picked
+            }
+        default:
+            // 取消：仍然标记为已确认，避免每次启动都弹；用默认值
+            break
+        }
+
+        Settings.hasChosenWallpaperFolder = true
+        try? FileManager.default.createDirectory(at: Settings.wallpaperFolder,
+                                                 withIntermediateDirectories: true)
+    }
+
+    /// 弹目录选择面板，返回用户选中的目录
+    private func pickFolder(startingAt: URL) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = startingAt
+        panel.prompt = L10n.t("folder.choosePrompt")
+        panel.message = L10n.t("folder.chooseBody")
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    /// 把一个外部文件复制进壁纸文件夹，返回新路径。
+    /// 已经在文件夹内的文件原样返回，不重复复制。
+    private func importIntoWallpaperFolder(_ path: String) -> String {
+        let fm = FileManager.default
+        let folder = Settings.wallpaperFolder
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let src = URL(fileURLWithPath: path)
+        let folderPath = folder.standardizedFileURL.path
+        if src.standardizedFileURL.path.hasPrefix(folderPath + "/") {
+            return path      // 已在文件夹里
+        }
+
+        var dest = folder.appendingPathComponent(src.lastPathComponent)
+        // 同名冲突时加序号，绝不覆盖用户已有文件
+        if fm.fileExists(atPath: dest.path) {
+            let base = src.deletingPathExtension().lastPathComponent
+            let ext = src.pathExtension
+            var i = 2
+            repeat {
+                let name = ext.isEmpty ? "\(base)-\(i)" : "\(base)-\(i).\(ext)"
+                dest = folder.appendingPathComponent(name)
+                i += 1
+            } while fm.fileExists(atPath: dest.path) && i < 1000
+        }
+
+        do {
+            try fm.copyItem(at: src, to: dest)
+            return dest.path
+        } catch {
+            return path      // 复制失败就退回原路径，不阻断添加
+        }
+    }
+
     @objc private func addFiles() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -2353,8 +2585,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         guard !paths.isEmpty else { return 0 }
 
         // 只接受本应用能处理的类型，避免把随便什么文件塞进库里
-        let usable = paths.filter { MediaTypes.isSupported($0) }
-        guard !usable.isEmpty else { return 0 }
+        let supported = paths.filter { MediaTypes.isSupported($0) }
+        guard !supported.isEmpty else { return 0 }
+
+        // 统一收进壁纸文件夹：外部文件会被复制进来，
+        // 这样素材库的位置稳定，不依赖用户原始文件是否被移动或删除。
+        let usable = supported.map { importIntoWallpaperFolder($0) }
 
         var added = 0
         StateStore.shared.update { st in
@@ -2588,6 +2824,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         reloadPresets(select: preset.id)
         showPresetDetail(presetID: preset.id)
         flashStatus(L10n.t("preset.saved", trimmed, preset.displayCount))
+    }
+
+    /// 面板里「加载」按钮：按侧栏当前选中的预设应用。
+    @objc private func loadSelectedPresetFromButton() {
+        guard case .preset(let id) = sidebarSelection,
+              let p = state.presets.first(where: { $0.id == id }) else { return }
+        applyPreset(p)
     }
 
     @objc private func loadSelectedPreset() {
