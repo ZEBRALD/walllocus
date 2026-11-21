@@ -1917,7 +1917,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         thumbnailGrid.select(path: path, notify: false)
         refreshControls()
     }
-
     // MARK: 重命名
 
     /// 名称框提交：写入 alias，然后刷新下拉框与网格

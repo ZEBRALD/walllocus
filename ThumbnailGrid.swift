@@ -414,16 +414,36 @@ final class ThumbnailGrid: NSView {
     func select(path: String?, notify: Bool = false) {
         guard let path,
               let idx = pageItems.firstIndex(where: { $0.path == path }) else {
-            suppressCallback = true
-            collection.deselectAll(nil)
-            suppressCallback = false
+            // 没有可选项：只在确实有选中项时才清除，避免无谓的刷新
+            if !collection.selectionIndexPaths.isEmpty {
+                suppressCallback = true
+                NSAnimationContext.beginGrouping()
+                NSAnimationContext.current.duration = 0
+                collection.deselectAll(nil)
+                NSAnimationContext.endGrouping()
+                suppressCallback = false
+            }
             return
         }
-        let set = Set([IndexPath(item: idx, section: 0)])
+
+        let target = IndexPath(item: idx, section: 0)
+        // 已经是目标状态时什么都不做：点同一张卡片不应该触发任何重绘
+        if collection.selectionIndexPaths == [target] {
+            if notify { onSelect?(path) }
+            return
+        }
+
+        // 关键：deselectAll + selectItems 会在同一帧内各触发一轮 isSelected 回调，
+        // 视觉上就是「旧框消失 → 新框出现」的两段闪烁，看起来像反应慢。
+        // 包进一次 duration=0 的动画分组，让两批更新合并成一次重绘。
         suppressCallback = true
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
         collection.deselectAll(nil)
-        collection.selectItems(at: set, scrollPosition: [])
+        collection.selectItems(at: Set([target]), scrollPosition: [])
+        NSAnimationContext.endGrouping()
         suppressCallback = false
+
         if notify { onSelect?(path) }
     }
 
