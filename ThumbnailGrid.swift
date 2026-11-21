@@ -28,15 +28,22 @@ final class CardView: NSView {
 final class ThumbnailItem: NSCollectionViewItem {
 
     static let identifier = NSUserInterfaceItemIdentifier("ThumbnailItem")
-    /// 卡片基准尺寸。实际渲染会按中栏可用宽度等比调整（见 ThumbnailGrid.applyCardScale）。
+    /// 卡片基准尺寸（不改，作为等比缩放的比例来源）。
+    static let baseCardSize = NSSize(width: 112, height: 92)
+    /// 当前实际尺寸，随窗口大小变化。
     static var cardSize = NSSize(width: 112, height: 92)
-    private static let thumbHeight: CGFloat = 70
+    /// 缩略图高度跟随卡片尺寸：卡片变高时缩略图同步变高，
+    /// 否则卡片宽/高比会失真（列数看起来会跳变）。
+    /// 卡片高 92 时原值为 70，即缩略图约占卡片高的 76%。
+    static var thumbHeight: CGFloat { round(cardSize.height * 0.76) }
 
     private let thumbView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let badge = NSImageView()
     /// 「正在使用」角标：左上角小圆点
     private let inUseDot = NSView()
+    /// 缩略图高度约束（卡片尺寸变化时更新它，让缩略图跟着变大变小）
+    private var thumbHeightConstraint: NSLayoutConstraint?
 
     private(set) var representedPath: String?
     /// 双击卡片（用于进入重命名）
@@ -97,7 +104,7 @@ final class ThumbnailItem: NSCollectionViewItem {
             thumbView.topAnchor.constraint(equalTo: v.topAnchor, constant: 2),
             thumbView.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 2),
             thumbView.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -2),
-            thumbView.heightAnchor.constraint(equalToConstant: Self.thumbHeight),
+            thumbHeightConstraintSetup(v),
 
             nameLabel.topAnchor.constraint(equalTo: thumbView.bottomAnchor, constant: 2),
             nameLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 2),
@@ -134,6 +141,8 @@ final class ThumbnailItem: NSCollectionViewItem {
 
     /// 绑定素材。inUse = 是否正被某块屏使用。
     func configure(path: String, title: String, originalName: String, kind: MediaKind, inUse: Bool) {
+        // 卡片尺寸会随窗口缩放变化，缩略图高度必须同步，否则卡片会被压扁/拉伸
+        thumbHeightConstraint?.constant = Self.thumbHeight
         representedPath = path
         nameLabel.stringValue = title
         badge.isHidden = (kind != .video)
@@ -186,6 +195,19 @@ final class ThumbnailItem: NSCollectionViewItem {
             .withSymbolConfiguration(cfg)
     }
 
+    /// 卡片尺寸变化后重新设定缩略图高度（由 ThumbnailGrid 调用）
+    func refreshCardSize() {
+        thumbHeightConstraint?.constant = Self.thumbHeight
+        view.needsLayout = true
+    }
+
+    /// 建立并保存缩略图高度约束，返回它供 NSLayoutConstraint.activate 使用
+    private func thumbHeightConstraintSetup(_ v: NSView) -> NSLayoutConstraint {
+        let c = thumbView.heightAnchor.constraint(equalToConstant: Self.thumbHeight)
+        thumbHeightConstraint = c
+        return c
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         representedPath = nil
@@ -213,6 +235,7 @@ final class ThumbnailGrid: NSView {
     private(set) var columns = 4
     private(set) var rows = 3
     private var page = 0
+    private var collectionScrollView: NSScrollView?
 
     private var allItems: [LibraryItem] = []
     private var inUsePaths: Set<String> = []
@@ -255,7 +278,9 @@ final class ThumbnailGrid: NSView {
         collection.translatesAutoresizingMaskIntoConstraints = false
 
         scroll.documentView = collection
-        scroll.hasVerticalScroller = false
+        // 窗口太小时 25 个排不下一屏，需要滚动条
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
         scroll.hasHorizontalScroller = false
         scroll.drawsBackground = false
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -296,27 +321,31 @@ final class ThumbnailGrid: NSView {
             collection.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             collection.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             collection.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
-            collection.bottomAnchor.constraint(equalTo: scroll.contentView.bottomAnchor),
+            // 高度不在这里约束：NSCollectionView 作为 documentView 时，
+            // Auto Layout 无法从内容推导出高度。改为在 updateCollectionHeight()
+            // 里按「行数 × 行高 + 间距」手动设置 frame，这样超出可视区就能滚动。
         ])
+        collectionScrollView = scroll
     }
 
     // MARK: 对外接口
 
     /// 设置每页行列数（由外部按可用高度决定）
-    /// 按「可用宽度 / 列数」反推卡片宽度，让网格铺满可用空间。
-    /// Flow layout 虽会把多余宽度摊到列间距，但卡片本身不会变宽，
-    /// 结果是右边永远留一条空隙、缩略图也偏小。这里直接改 itemSize 让卡片长到该有的尺寸。
-    func applyCardWidth(availableWidth: CGFloat, columns: Int) {
+    /// 网格固定为 4 列 × 5 行；这里按可用空间算出能让它们都放下的最大卡片尺寸。
+    /// 取「宽度均分」与「高度均分」中较小的那个，保证两个方向都不溢出。
+    /// 按可用宽度与列数算出卡片尺寸。
+    /// 宽度必须精确等于「可用宽 / 列数」：NSCollectionViewFlowLayout 只要一行塞得下
+    /// 就会多塞，卡片稍窄就会出现比设定更多的列（实测出现过 5 列、7 列）。
+    func applyCardSize(availableWidth: CGFloat, columns: Int) {
         guard columns > 0, availableWidth > 0 else { return }
-        let inset: CGFloat = 4          // sectionInset 左右各 2
         let spacing: CGFloat = 8
-        let usable = availableWidth - inset - spacing * CGFloat(columns - 1)
-        let w = floor(usable / CGFloat(columns))
-        // 限制在合理区间，避免窗口极小/极大时卡片变形
-        let clamped = max(96, min(220, w))
-        let ratio = clamped / ThumbnailItem.cardSize.width
+        let insetW: CGFloat = 4
+        let w = floor((availableWidth - insetW - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+        let clamped = max(80, min(220, w))
+        let base = ThumbnailItem.baseCardSize
         let newSize = NSSize(width: clamped,
-                             height: round(ThumbnailItem.cardSize.height * ratio))
+                             height: round(clamped * base.height / base.width))
+
         guard abs(newSize.width - ThumbnailItem.cardSize.width) > 0.5 else { return }
         ThumbnailItem.cardSize = newSize
         if let layout = collection.collectionViewLayout as? NSCollectionViewFlowLayout {
@@ -324,6 +353,10 @@ final class ThumbnailGrid: NSView {
             collection.collectionViewLayout = layout
             collection.collectionViewLayout?.invalidateLayout()
         }
+        for case let item as ThumbnailItem in collection.visibleItems() {
+            item.refreshCardSize()
+        }
+        collection.layoutSubtreeIfNeeded()
     }
 
     func setGrid(columns: Int, rows: Int) {
@@ -392,7 +425,9 @@ final class ThumbnailGrid: NSView {
         if notify { onSelect?(path) }
     }
 
-    var pageSize: Int { columns * rows }
+    /// 每页固定 25 个（与行列数解绑：窗口窄时行数会更多，靠滚动查看）
+    static let pageCapacity = 25
+    var pageSize: Int { Self.pageCapacity }
 
     var pageCount: Int {
         guard pageSize > 0, !allItems.isEmpty else { return 1 }
@@ -407,6 +442,21 @@ final class ThumbnailGrid: NSView {
 
     // MARK: 内部分页
 
+    /// 按当前行数与卡片尺寸设置 collection 高度，使其能滚动。
+    /// documentView 交给 Auto Layout 处理高度在这条链上不可靠（实测滚不动），
+    /// 所以直接设 frame。
+    private func updateCollectionHeight() {
+        guard let scroll = collectionScrollView else { return }
+        let w = scroll.contentView.bounds.width
+        guard w > 0 else { return }
+        let visibleCount = pageItems.count
+        let usedCols = max(1, columns)
+        let usedRows = max(1, Int(ceil(Double(visibleCount) / Double(usedCols))))
+        let rowH = ThumbnailItem.cardSize.height + 8
+        let h = max(CGFloat(usedRows) * rowH + 8, scroll.contentView.bounds.height)
+        collection.frame = NSRect(x: 0, y: 0, width: w, height: h)
+    }
+
     private func refreshPage() {
         clampPage()
         let start = page * pageSize
@@ -414,6 +464,16 @@ final class ThumbnailGrid: NSView {
         pageItems = start < end ? Array(allItems[start..<end]) : []
         collection.reloadData()
         updatePager()
+        // 内容变了，高度也要跟着变（决定是否出现滚动条）
+        DispatchQueue.main.async { [weak self] in
+            self?.updateCollectionHeight()
+        }
+    }
+
+    /// 布局变化（窗口缩放）后重新计算高度
+    override func layout() {
+        super.layout()
+        updateCollectionHeight()
     }
 
     private func updatePager() {

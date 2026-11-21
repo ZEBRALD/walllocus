@@ -1380,33 +1380,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 按窗口宽度算网格列数（卡片 112 + 间距 8）
+    /// 网格固定 4 列 × 5 行，窗口缩放时只调整缩略图尺寸。
+    ///
+    /// 之前行列都按空间算，窗口拉大就变成 8 列、分页消失 —— 每页数量飘忽不定，
+    /// 找素材时反而没有稳定的位置记忆。现在锁定 4x5（一页 20 个），
+    /// 界面变大时让卡片同步变大，视觉更舒展。
+    /// 每页固定 25 个素材；行列组合随窗口比例自动变化。
+    /// 
+    /// 规则：先按可用宽度定列数（保证卡片宽度合适），
+    /// 再用 ceil(25 / 列数) 反推行数 —— 这样无论窗口多宽多窄，一页永远是 25 个。
+    /// 窗口高度不够时会溢出，网格自带滚动条可以往下拉（用户明确要求）。
     private func relayoutGridColumns() {
         guard let win = window else { return }
 
-        // 行列都按中栏实际可用空间算，不再写死行数。
-        // 之前固定 3 行：中栏高 541 只用了 300pt，窗口放大后也只增列不增行，
-        // 一半高度白白空着（用户反馈「一页只有 4x3，UI 变大了还能放更多」）。
         let middleWidth = win.frame.width - 200 - 2 - 300 - 20
-        let middleHeight = win.frame.height - 56 - 30 - 40   // 顶栏 + 底栏 + 上下内边距
 
-        // NSCollectionViewFlowLayout 会把行内多余宽度平摊到列间距，
-        // 所以这里按「最小占宽 = 卡片 112 + 间距 8」估算能放几列，
-        // 实际渲染时卡片会被均匀撑开、铺满中栏。
-        // 垂直方向同理：卡片 92 + 间距 8，另留 28 给分页条。
-        let minCellW: CGFloat = 112 + 8
-        let minCellH: CGFloat = 92 + 8
-        let cols = max(3, min(10, Int((middleWidth + 8) / minCellW) + 0))
+        // 目标卡片宽度：约 132pt 时观感最好（默认 1100 宽窗口下是 4 列）
+        let targetCardW: CGFloat = 132
+        let cols = max(2, min(8, Int(round(middleWidth / targetCardW))))
+        let rows = Int(ceil(Double(ThumbnailGrid.pageCapacity) / Double(cols)))
 
-        // 让卡片按可用宽度长到该有的尺寸，铺满中栏（原来右侧总留一条空隙）。
-        // 扣掉滚动条宽度，否则最后一列会被它压住。
-        let usableW = middleWidth - 20
-        thumbnailGrid.applyCardWidth(availableWidth: usableW, columns: cols)
-
-        // 卡片高度会跟着宽度等比变，这里重算行数。
-        // 必须留足余量：分页条实际占 28pt、scroll 上下还有 4pt inset，
-        // 之前 +8 的宽松估算让第 5 行被分页条压住（实测截图中最后一行被裁）。
-        let cellH = ThumbnailItem.cardSize.height + 8
-        let rows = max(2, min(6, Int(floor((middleHeight - 40) / cellH))))
+        // 卡片尺寸按可用宽度均分（让 FlowLayout 正好排下 cols 个，不会挤进更多）
+        thumbnailGrid.applyCardSize(availableWidth: middleWidth - 24,
+                                     columns: cols)
 
         guard cols != gridColumns || rows != gridRows else { return }
         gridColumns = cols
