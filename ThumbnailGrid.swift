@@ -265,7 +265,8 @@ final class ThumbnailGrid: NSView {
         layout.itemSize = ThumbnailItem.cardSize
         layout.minimumInteritemSpacing = 8
         layout.minimumLineSpacing = 8
-        layout.sectionInset = NSEdgeInsets(top: 4, left: 2, bottom: 4, right: 2)
+        // 右侧多留 12pt 给 overlay 滚动条，否则缩略图会被它压住一角
+        layout.sectionInset = NSEdgeInsets(top: 4, left: 2, bottom: 4, right: 12)
 
         collection.collectionViewLayout = layout
         collection.register(ThumbnailItem.self,
@@ -371,7 +372,8 @@ final class ThumbnailGrid: NSView {
         layout.itemSize = ThumbnailItem.cardSize
         layout.minimumInteritemSpacing = 8
         layout.minimumLineSpacing = 8
-        layout.sectionInset = NSEdgeInsets(top: 4, left: 2, bottom: 4, right: 2)
+        // 右侧多留 12pt 给 overlay 滚动条，否则缩略图会被它压住一角
+        layout.sectionInset = NSEdgeInsets(top: 4, left: 2, bottom: 4, right: 12)
         collection.collectionViewLayout = layout
 
         // 行列数变了，每页能装的数量就变了，必须重新切片。
