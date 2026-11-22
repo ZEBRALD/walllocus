@@ -1503,8 +1503,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // withinWindow：采样本窗口内、这层之下的内容 ——
         // 也就是底玻璃模糊过的壁纸色。behindWindow 会直接采桌面，
         // 被 baseTint 压暗后又变回纯色。
+        // 与左右栏底层保持同一档透明度
         _ = addGlass(to: pane, material: .underWindowBackground,
-                     blending: .withinWindow, tint: 0.04)
+                     blending: .withinWindow, tint: 0.14)
 
         addButton.title = L10n.t("win.addFiles")
         addButton.bezelStyle = .rounded
