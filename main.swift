@@ -507,6 +507,22 @@ enum Settings {
     /// 壁纸文件存放目录。首次使用时默认 ~/Pictures/WallLocus，
     /// 用户也可以改成任意目录。新添加的素材会被复制到这里集中管理。
     /// 左栏宽度（拖拽调整后持久化）
+    /// 图库排序键：name / date
+    static var sortKey: String {
+        get { UserDefaults.standard.string(forKey: "librarySortKey") ?? "name" }
+        set { UserDefaults.standard.set(newValue, forKey: "librarySortKey") }
+    }
+
+    /// 排序方向：true = 升序
+    static var sortAscending: Bool {
+        get {
+            let d = UserDefaults.standard
+            if d.object(forKey: "librarySortAscending") == nil { return true }
+            return d.bool(forKey: "librarySortAscending")
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "librarySortAscending") }
+    }
+
     /// 网格里是否显示图片文件名（默认显示）
     static var showGridFileNames: Bool {
         get {
@@ -2283,6 +2299,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 设置菜单。按功能分组成二级子菜单，避免一长串平铺项。
+    @objc private func setSortKey(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        Settings.sortKey = key
+        scanWallpaperFolder()
+        reloadLibrary()
+    }
+
+    @objc private func setSortOrder(_ sender: NSMenuItem) {
+        guard let asc = sender.representedObject as? Bool else { return }
+        Settings.sortAscending = asc
+        scanWallpaperFolder()
+        reloadLibrary()
+    }
+
     /// 切换网格里文件名显示
     @objc private func toggleGridFileNames() {
         Settings.showGridFileNames.toggle()
@@ -2326,6 +2356,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         showNames.target = self
         showNames.state = Settings.showGridFileNames ? .on : .off
         librarySub.addItem(showNames)
+
+        librarySub.addItem(.separator())
+
+        // ── 排序依据：文件名 / 修改时间 ──
+        let sortByItem = NSMenuItem(title: L10n.t("setting.sortBy"), action: nil, keyEquivalent: "")
+        let sortBySub = NSMenu()
+        for (key, labelKey) in [("name", "setting.sortByName"), ("date", "setting.sortByDate")] {
+            let it = NSMenuItem(title: L10n.t(labelKey),
+                                action: #selector(setSortKey(_:)),
+                                keyEquivalent: "")
+            it.target = self
+            it.representedObject = key
+            it.state = Settings.sortKey == key ? .on : .off
+            sortBySub.addItem(it)
+        }
+        sortByItem.submenu = sortBySub
+        librarySub.addItem(sortByItem)
+
+        // ── 排序方向：升序 / 降序 ──
+        let orderItem = NSMenuItem(title: L10n.t("setting.sortOrder"), action: nil, keyEquivalent: "")
+        let orderSub = NSMenu()
+        for (asc, labelKey) in [(true, "setting.sortAsc"), (false, "setting.sortDesc")] {
+            let it = NSMenuItem(title: L10n.t(labelKey),
+                                action: #selector(setSortOrder(_:)),
+                                keyEquivalent: "")
+            it.target = self
+            it.representedObject = asc
+            it.state = Settings.sortAscending == asc ? .on : .off
+            orderSub.addItem(it)
+        }
+        orderItem.submenu = orderSub
+        librarySub.addItem(orderItem)
 
         librarySub.addItem(.separator())
         let cur = NSMenuItem(title: L10n.t("setting.currentFolder", Settings.wallpaperFolder.path),
@@ -3145,6 +3207,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                 item.category = f.category
                 rebuilt.append(item)
             }
+            // 按设置排序：文件名 / 修改时间 × 升序 / 降序
+            let byName = Settings.sortKey == "name"
+            let asc = Settings.sortAscending
+            rebuilt.sort { a, b in
+                let aKey: String
+                let bKey: String
+                if byName {
+                    aKey = (a.path as NSString).lastPathComponent.lowercased()
+                    bKey = (b.path as NSString).lastPathComponent.lowercased()
+                } else {
+                    aKey = Self.modifiedStamp(a.path)
+                    bKey = Self.modifiedStamp(b.path)
+                }
+                return asc ? (aKey < bKey) : (aKey > bKey)
+            }
             st.library = rebuilt
         }
 
@@ -3155,6 +3232,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                 st.assignment.removeValue(forKey: id)
             }
         }
+    }
+
+    /// 文件的修改时间戳（用于「按时间排序」）。
+    /// 取不到时返回固定值，避免排序不稳定。
+    private static func modifiedStamp(_ path: String) -> String {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        let date = attrs?[.modificationDate] as? Date
+        // 用固定宽度的秒数保证字典序 == 时间序
+        return String(format: "%020.6f", date?.timeIntervalSince1970 ?? 0)
     }
 
     /// 壁纸文件夹下的所有分类（子文件夹名），按名称排序
