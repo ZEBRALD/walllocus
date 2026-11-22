@@ -78,6 +78,10 @@ final class SidebarNavigator: NSView {
         var children: [Node] = []
         init(_ kind: Kind) { self.kind = kind }
     }
+    /// 底部信息区（当前选中项的名称 + 素材）
+    private let infoBox = NSView()
+    private let infoTitle = NSTextField(labelWithString: "")
+    private let infoSubtitle = NSTextField(labelWithString: "")
     private let libraryGroup = Node(.group("library"))
     private let presetGroup = Node(.group("preset"))
     private let displayGroup = Node(.group("display"))
@@ -183,6 +187,39 @@ final class SidebarNavigator: NSView {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scroll)
 
+        // ── 底部信息区：显示当前选中显示器/预设的名称与素材 ──
+        infoBox.wantsLayer = true
+        infoBox.layer?.cornerRadius = 8
+        infoBox.layer?.backgroundColor = NSColor(white: 0, alpha: 0.22).cgColor
+        infoBox.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(infoBox)
+
+        infoTitle.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        infoTitle.lineBreakMode = .byTruncatingTail
+        infoTitle.translatesAutoresizingMaskIntoConstraints = false
+        infoBox.addSubview(infoTitle)
+
+        infoSubtitle.font = NSFont.systemFont(ofSize: 10)
+        infoSubtitle.textColor = .secondaryLabelColor
+        infoSubtitle.lineBreakMode = .byTruncatingMiddle
+        infoSubtitle.translatesAutoresizingMaskIntoConstraints = false
+        infoBox.addSubview(infoSubtitle)
+
+        NSLayoutConstraint.activate([
+            infoBox.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            infoBox.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            infoBox.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
+
+            infoTitle.leadingAnchor.constraint(equalTo: infoBox.leadingAnchor, constant: 10),
+            infoTitle.trailingAnchor.constraint(equalTo: infoBox.trailingAnchor, constant: -10),
+            infoTitle.topAnchor.constraint(equalTo: infoBox.topAnchor, constant: 8),
+
+            infoSubtitle.leadingAnchor.constraint(equalTo: infoTitle.leadingAnchor),
+            infoSubtitle.trailingAnchor.constraint(equalTo: infoTitle.trailingAnchor),
+            infoSubtitle.topAnchor.constraint(equalTo: infoTitle.bottomAnchor, constant: 3),
+            infoSubtitle.bottomAnchor.constraint(equalTo: infoBox.bottomAnchor, constant: -8),
+        ])
+
         // 标题区：红绿灯下方显示「当前分类 / 素材数」。
         // 这块在面板内部，所以红绿灯看起来嵌在左栏里（照片 App 的排布）。
         titleLabel.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
@@ -232,11 +269,19 @@ final class SidebarNavigator: NSView {
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
 
-            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
+            // 底部让出选中项信息区
+            scroll.bottomAnchor.constraint(equalTo: infoBox.topAnchor, constant: -8),
         ])
     }
 
     // MARK: 数据
+
+    /// 更新底部信息区（当前选中显示器/预设）。
+    func setInfo(title: String, subtitle: String) {
+        infoTitle.stringValue = title
+        infoSubtitle.stringValue = subtitle
+        infoBox.isHidden = title.isEmpty && subtitle.isEmpty
+    }
 
     func reload(presets: [WallpaperPreset],
                 screens: [NSScreen],

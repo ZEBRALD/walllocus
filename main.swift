@@ -1771,19 +1771,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 在 doc.addSubview 处统一设为 true。
 
         // 显示器信息
-        paneTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        paneTitle.lineBreakMode = .byTruncatingTail
-        root.addArrangedSubview(paneTitle)
-
-        paneSubtitle.font = NSFont.systemFont(ofSize: 11)
-        paneSubtitle.textColor = .secondaryLabelColor
-        paneSubtitle.lineBreakMode = .byTruncatingMiddle
-        // 长文件名会撑宽面板，必须限宽
-        paneSubtitle.translatesAutoresizingMaskIntoConstraints = false
-        let paneSubtitleW = paneSubtitle.widthAnchor.constraint(equalToConstant: 270)
-        detailWidthConstraints.append(paneSubtitleW)
-        paneSubtitleW.isActive = true
-        root.addArrangedSubview(paneSubtitle)
 
         // 当前素材的大图预览：给"选中了什么"一个明确的视觉锚点
         previewPane.translatesAutoresizingMaskIntoConstraints = false
@@ -2180,8 +2167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     private func showPresetDetail(presetID: String) {
         guard let p = state.presets.first(where: { $0.id == presetID }) else { return }
-        paneTitle.stringValue = p.name
-        paneSubtitle.stringValue = L10n.t("detail.presetSummary", p.displayCount)
+        sidebar.setInfo(title: p.name, subtitle: L10n.t("detail.presetSummary", p.displayCount))
         // 预设没有单一素材，取它里面第一张能用的来预览，
         // 让用户能看到「这套预设大概长什么样」。
         let cover = p.assignment.values.first { path in state.library.contains { $0.path == path } }
@@ -2705,8 +2691,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         guard let item = selectedItem else {
             scopeLabel.stringValue = L10n.t("win.scope.none")
 
-            paneTitle.stringValue = L10n.t("win.scope.none")
-            paneSubtitle.stringValue = ""
+            sidebar.setInfo(title: L10n.t("win.scope.none"), subtitle: "")
             previewPane.show(path: nil, fallbackText: L10n.t("preview.noSelection"))
             updateFileInfo(for: nil)
             adjustControlsEnabled(false)
@@ -2732,19 +2717,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             let scale = s.backingScaleFactor
             let w = Int(s.frame.width * scale)
             let h = Int(s.frame.height * scale)
-            paneTitle.stringValue = "\(scopeName)  \(w)×\(h)"
+            sidebar.setInfo(title: "\(scopeName)  \(w)×\(h)", subtitle: "")
             // 这块屏当前用的是什么（可能和选中的素材不同）
             let id = screenID(s)
             if let using = state.assignment[id] {
                 let usingName = state.library.first { $0.path == using }?.displayName
                     ?? (using as NSString).lastPathComponent
-                paneSubtitle.stringValue = L10n.t("detail.using", usingName)
+                sidebar.setInfo(title: "\(scopeName)  \(w)×\(h)", subtitle: L10n.t("detail.using", usingName))
             } else {
-                paneSubtitle.stringValue = L10n.t("detail.notUsing")
+                sidebar.setInfo(title: "\(scopeName)  \(w)×\(h)", subtitle: L10n.t("detail.notUsing"))
             }
         } else {
-            paneTitle.stringValue = scopeName
-            paneSubtitle.stringValue = item.displayName
+            sidebar.setInfo(title: scopeName, subtitle: item.displayName)
         }
         // 右栏大图预览：此前只更新了标题与副标题，从未调用 previewPane.show，
         // 所以选中素材时预览区一直空白（用户反馈的 bug）。
