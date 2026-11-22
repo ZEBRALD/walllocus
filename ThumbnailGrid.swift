@@ -356,7 +356,7 @@ final class ThumbnailGrid: NSView {
         layout.minimumInteritemSpacing = 10
         layout.minimumLineSpacing = 12
         // 照片是通铺布局：左右几乎不留边，右侧只给滚动条让一点
-        layout.sectionInset = NSEdgeInsets(top: 2, left: 16, bottom: 2, right: 16)
+        layout.sectionInset = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 16)
 
         collection.collectionViewLayout = layout
         collection.register(ThumbnailItem.self,
@@ -401,7 +401,9 @@ final class ThumbnailGrid: NSView {
 
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: topAnchor),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            // 左缘外扩 5pt：抵消卡片自身的 2pt 内边距与视觉留白，
+            // 让第一列卡片与右栏内容的左边线对齐。
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: -10),
             // 右缘外扩 8pt：overlay 滚动条自带内缩，
             // 外扩以抵消它，让滚动条与另两栏处于同一视觉列。
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 8),
@@ -498,7 +500,7 @@ final class ThumbnailGrid: NSView {
         // 必须与 setGrid 里的 minimumInteritemSpacing / sectionInset 保持一致，
         // 否则算出来的卡片偏宽，一行塞不下第 5 个，实测只显示 4 列。
         let spacing: CGFloat = 10          // = layout.minimumInteritemSpacing
-        let insetW: CGFloat = 32           // = sectionInset.left(16) + right(16)
+        let insetW: CGFloat = 16           // = sectionInset.left(0) + right(16)
         // 减 1pt 吸收浮点误差：FlowLayout 只要差一点点就会把这一行
         // 判成「放不下」，表现为列数在 4/5 之间来回跳。
         let usable = availableWidth - insetW - spacing * CGFloat(columns - 1) - 1
@@ -526,7 +528,7 @@ final class ThumbnailGrid: NSView {
             // 否则 FlowLayout 会按旧间距排出比预期少的列数。
             layout.minimumInteritemSpacing = 10
             layout.minimumLineSpacing = 12
-            layout.sectionInset = NSEdgeInsets(top: 2, left: 16, bottom: 2, right: 16)
+            layout.sectionInset = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 16)
             layout.invalidateLayout()
             collection.collectionViewLayout = layout
         }
@@ -549,7 +551,7 @@ final class ThumbnailGrid: NSView {
         layout.minimumInteritemSpacing = 10
         layout.minimumLineSpacing = 12
         // 照片是通铺布局：左右几乎不留边，右侧只给滚动条让一点
-        layout.sectionInset = NSEdgeInsets(top: 2, left: 16, bottom: 2, right: 16)
+        layout.sectionInset = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 16)
         collection.collectionViewLayout = layout
 
         // 行列数变了，每页能装的数量就变了，必须重新切片。

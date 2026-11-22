@@ -1401,11 +1401,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 纵向三层：红绿灯(y8-24) → logo → 左栏面板
             // 左上角 12pt 边距由 logo 与面板共同体现
             sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 84),
-            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
             // 宽度可变：由拖拽条调整（约束存在属性里，拖动时改 constant）
             sidebarWidthConstraint,
             // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
-            sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+            sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
 
             // ── 中栏：通铺，不圆角、不内缩 ──
             middle.topAnchor.constraint(equalTo: container.topAnchor),
@@ -1419,7 +1419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 右栏在顶栏浮层下方开始，留出可见的缝
             // 与左栏同高：顶栏已无背景，不再需要让位
             right.topAnchor.constraint(equalTo: container.topAnchor, constant: 84),
-            right.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            right.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
             rightWidthConstraint,
 
             // ── 拖拽条：贴在栏间缝隙上 ──
@@ -1432,13 +1432,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             rightHandle.topAnchor.constraint(equalTo: right.topAnchor),
             rightHandle.bottomAnchor.constraint(equalTo: right.bottomAnchor),
             rightHandle.widthAnchor.constraint(equalToConstant: 10),
-            right.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+            right.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
         ])
 
         // 用空 wrapper 当 contentView：
         // 直接把 container 当 contentView 时，AppKit 会按内容固有宽度
         // 反算窗口最大宽度，导致只能改高度、改不了宽度。
         let host = NSView()
+        // 窗口内容区也裁成 16pt 圆角，与左右栏面板保持一致 ——
+        // 否则窗口四角是系统默认的小圆角，与内部面板的弧度看着不搭。
+        host.wantsLayer = true
+        host.layer?.cornerRadius = 22
+        host.layer?.masksToBounds = true
         w.contentView = host
         container.translatesAutoresizingMaskIntoConstraints = false
         host.addSubview(container)
