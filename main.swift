@@ -507,6 +507,20 @@ enum Settings {
     /// 壁纸文件存放目录。首次使用时默认 ~/Pictures/WallLocus，
     /// 用户也可以改成任意目录。新添加的素材会被复制到这里集中管理。
     /// 左栏宽度（拖拽调整后持久化）
+    /// 左栏分组顺序（默认：显示器 > 壁纸库 > 预设）。
+    /// 存成逗号分隔的键序列，读取时校验并补全缺失项。
+    static var groupOrder: [String] {
+        get {
+            let raw = UserDefaults.standard.string(forKey: "sidebarGroupOrder") ?? ""
+            let parts = raw.split(separator: ",").map(String.init)
+                .filter { ["display", "library", "preset"].contains($0) }
+            return parts.isEmpty ? ["display", "library", "preset"] : parts
+        }
+        set {
+            UserDefaults.standard.set(newValue.joined(separator: ","), forKey: "sidebarGroupOrder")
+        }
+    }
+
     /// 图库排序键：name / date
     static var sortKey: String {
         get { UserDefaults.standard.string(forKey: "librarySortKey") ?? "name" }
@@ -1715,7 +1729,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         thumbnailGrid.onDoubleClick = { [weak self] path in
             guard let self,
                   let idx = self.state.library.firstIndex(where: { $0.path == path }) else { return }
-            self.libraryPopup.selectItem(at: idx)
             StateStore.shared.update { st in st.lastSelectedItem = path }
             self.refreshControls()
         }
@@ -2299,17 +2312,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 设置菜单。按功能分组成二级子菜单，避免一长串平铺项。
+    /// 切换左栏分组顺序（六种排列）
+    @objc private func setGroupOrder(_ sender: NSMenuItem) {
+        guard let order = sender.representedObject as? String else { return }
+        Settings.groupOrder = order.split(separator: ",").map(String.init)
+        // 侧栏数据要重建（roots 是按当前设置算的）
+        sidebar.reload(presets: state.presets,
+                       screens: screens,
+                       categories: wallpaperCategories(),
+                       statuses: displayStatusMap().perDisplay,
+                       aggregate: displayStatusMap().aggregate,
+                       selection: sidebarSelection)
+    }
+
     @objc private func setSortKey(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
         Settings.sortKey = key
-        scanWallpaperFolder()
-        reloadLibrary()
+        resortLibraryInPlace()
     }
 
     @objc private func setSortOrder(_ sender: NSMenuItem) {
         guard let asc = sender.representedObject as? Bool else { return }
         Settings.sortAscending = asc
-        scanWallpaperFolder()
+        resortLibraryInPlace()
+    }
+
+    /// 只按当前设置重排内存里的库，不重扫磁盘。
+    ///
+    /// 换排序键/方向时磁盘内容没变，重新遍历目录 + 逐个 stat 完全是浪费，
+    /// 这也是点完菜单要等一下才刷新的原因。
+    private func resortLibraryInPlace() {
+        let t0 = Date()
+        defer {
+            if let fh = FileHandle(forWritingAtPath: "/tmp/wl-sort.log") {
+                let d = String(format: "resort %.0f ms\n", Date().timeIntervalSince(t0) * 1000)
+                fh.seekToEndOfFile(); fh.write(d.data(using: .utf8) ?? Data()); fh.closeFile()
+            }
+        }
+        let byName = Settings.sortKey == "name"
+        let asc = Settings.sortAscending
+        StateStore.shared.update { st in
+            let keyed: [(key: String, item: LibraryItem)] = st.library.map { item in
+                let k = byName
+                    ? (item.path as NSString).lastPathComponent.lowercased()
+                    : Self.modifiedStamp(item.path)
+                return (k, item)
+            }
+            st.library = keyed.sorted { asc ? ($0.key < $1.key) : ($0.key > $1.key) }
+                .map { $0.item }
+        }
         reloadLibrary()
     }
 
@@ -2356,6 +2407,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         showNames.target = self
         showNames.state = Settings.showGridFileNames ? .on : .off
         librarySub.addItem(showNames)
+
+        librarySub.addItem(.separator())
+
+        // ── 左栏分组顺序 ──
+        let orderMenuItem = NSMenuItem(title: L10n.t("setting.groupOrder"),
+                                       action: nil, keyEquivalent: "")
+        let orderMenuSub = NSMenu()
+        let currentOrder = Settings.groupOrder.joined(separator: ",")
+        let orderChoices: [(String, String)] = [
+            ("display,library,preset", "setting.order.dlp"),
+            ("display,preset,library", "setting.order.dpl"),
+            ("library,display,preset", "setting.order.ldp"),
+            ("library,preset,display", "setting.order.lpd"),
+            ("preset,display,library", "setting.order.pdl"),
+            ("preset,library,display", "setting.order.pld"),
+        ]
+        for (value, labelKey) in orderChoices {
+            let it = NSMenuItem(title: L10n.t(labelKey),
+                                action: #selector(setGroupOrder(_:)),
+                                keyEquivalent: "")
+            it.target = self
+            it.representedObject = value
+            it.state = currentOrder == value ? .on : .off
+            orderMenuSub.addItem(it)
+        }
+        orderMenuItem.submenu = orderMenuSub
+        librarySub.addItem(orderMenuItem)
 
         librarySub.addItem(.separator())
 
@@ -2589,21 +2667,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     private func reloadLibrary() {
-        libraryPopup.removeAllItems()
-        if state.library.isEmpty {
-            libraryPopup.addItem(withTitle: L10n.t("win.libraryEmpty"))
-            libraryPopup.isEnabled = false
-        } else {
-            libraryPopup.isEnabled = true
-            for item in state.library {
-                libraryPopup.addItem(withTitle: "\(item.kind.label) · \(item.displayName)")
-            }
-            // 启动 / 刷新后恢复上次选中的素材
-            if let last = state.lastSelectedItem,
-               let idx = state.library.firstIndex(where: { $0.path == last }) {
-                libraryPopup.selectItem(at: idx)
-            }
-        }
+        // libraryPopup 是三栏改版前的控件，已不在视图层级里。
+        // 之前每次重载都给它重建 300+ 项菜单，纯属浪费（实测是卡顿主因）。
+        // 保留属性以免牵动其它引用，但不再刷新内容。
         // 同步网格（用过滤后的结果；搜索时只显示命中的素材）
         let used = Set(state.assignment.values)
         let visible = filteredLibrary()
@@ -2625,10 +2691,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     /// 用户点了网格卡片：只更新选择，不应用壁纸
     private func selectFromGrid(path: String) {
-        guard let idx = state.library.firstIndex(where: { $0.path == path }) else { return }
-        if libraryPopup.indexOfSelectedItem != idx {
-            libraryPopup.selectItem(at: idx)
-        }
         StateStore.shared.update { st in
             st.lastSelectedItem = path
         }
@@ -2697,7 +2759,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     @objc private func beginRenameFromCard(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String,
               let idx = state.library.firstIndex(where: { $0.path == path }) else { return }
-        libraryPopup.selectItem(at: idx)
         StateStore.shared.update { st in st.lastSelectedItem = path }
         refreshControls()
     }
@@ -2731,7 +2792,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     @objc private func removeFromCard(_ sender: NSMenuItem) {
         guard let path = sender.representedObject as? String,
               let idx = state.library.firstIndex(where: { $0.path == path }) else { return }
-        libraryPopup.selectItem(at: idx)
         StateStore.shared.update { st in st.lastSelectedItem = path }
         removeFromLibrary()
     }
@@ -2741,9 +2801,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     private var selectedItem: LibraryItem? {
-        let idx = libraryPopup.indexOfSelectedItem
-        guard idx >= 0, idx < state.library.count else { return nil }
-        return state.library[idx]
+        // 以前靠 libraryPopup 的选中索引；那个控件已不在界面里，
+        // 改读持久化的 lastSelectedItem，语义更直接。
+        guard let path = state.lastSelectedItem else { return nil }
+        return state.library.first { $0.path == path }
     }
 
     /// 把 doc 与 root 的 frame 按实际内容高度设置。
@@ -3207,22 +3268,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                 item.category = f.category
                 rebuilt.append(item)
             }
-            // 按设置排序：文件名 / 修改时间 × 升序 / 降序
+            // 按设置排序：文件名 / 修改时间 × 升序 / 降序。
+            // 先算出每项的排序键再排 —— 直接在比较器里取文件属性，
+            // N 个文件会触发约 N·logN 次 stat 系统调用（309 项约 2400 次），
+            // 实测点一下排序要卡一秒多。
             let byName = Settings.sortKey == "name"
             let asc = Settings.sortAscending
-            rebuilt.sort { a, b in
-                let aKey: String
-                let bKey: String
-                if byName {
-                    aKey = (a.path as NSString).lastPathComponent.lowercased()
-                    bKey = (b.path as NSString).lastPathComponent.lowercased()
-                } else {
-                    aKey = Self.modifiedStamp(a.path)
-                    bKey = Self.modifiedStamp(b.path)
-                }
-                return asc ? (aKey < bKey) : (aKey > bKey)
+            let keyed: [(key: String, item: LibraryItem)] = rebuilt.map { item in
+                let k = byName
+                    ? (item.path as NSString).lastPathComponent.lowercased()
+                    : Self.modifiedStamp(item.path)
+                return (k, item)
             }
-            st.library = rebuilt
+            let sorted = keyed.sorted { asc ? ($0.key < $1.key) : ($0.key > $1.key) }
+            st.library = sorted.map { $0.item }
         }
 
         // 壁纸文件没了，对应的分配也该清掉
@@ -3339,7 +3398,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         reloadLibrary()
         // 选中新加入的素材
         if added > 0, let idx = state.library.firstIndex(where: { $0.path == usable[0] }) {
-            libraryPopup.selectItem(at: idx)
             StateStore.shared.update { $0.lastSelectedItem = usable[0] }
         }
         WallpaperManager.shared.applyAll()
@@ -3597,7 +3655,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         if let firstPath = preset.assignment.values.first(where: { p in
             state.library.contains { $0.path == p }
         }), let idx = state.library.firstIndex(where: { $0.path == firstPath }) {
-            libraryPopup.selectItem(at: idx)
             StateStore.shared.update { $0.lastSelectedItem = firstPath }
         }
 

@@ -85,7 +85,27 @@ final class SidebarNavigator: NSView {
     private let libraryGroup = Node(.group("library"))
     private let presetGroup = Node(.group("preset"))
     private let displayGroup = Node(.group("display"))
-    private lazy var roots: [Node] = [libraryGroup, presetGroup, displayGroup]
+    /// 分组顺序：由设置决定，默认「显示器 > 壁纸库 > 预设」。
+    /// 每次读取都按当前设置排序，这样改设置后只需 reload 即可生效。
+    private var roots: [Node] {
+        let all: [(String, Node)] = [
+            ("display", displayGroup),
+            ("library", libraryGroup),
+            ("preset", presetGroup),
+        ]
+        let order = Settings.groupOrder
+        var result: [Node] = []
+        for key in order {
+            if let hit = all.first(where: { $0.0 == key })?.1, !result.contains(where: { $0 === hit }) {
+                result.append(hit)
+            }
+        }
+        // 兜底：设置里漏掉的分组也补上，避免整块消失
+        for pair in all where !result.contains(where: { $0 === pair.1 }) {
+            result.append(pair.1)
+        }
+        return result
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
