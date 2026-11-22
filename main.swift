@@ -1034,6 +1034,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var topScrim: FadeOverlay?
     /// 左栏宽度约束（可拖拽调整）
     private var sidebarWidthConstraint: NSLayoutConstraint!
+    /// 顶栏标题的左边距约束（跟随左栏宽度）
+    private var titleLeadingConstraint: NSLayoutConstraint!
     /// 右栏宽度约束
     private var rightWidthConstraint: NSLayoutConstraint!
     /// 当前栏宽（拖拽时改这两个值）
@@ -1282,6 +1284,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.sidebarWidth = newW
             self.sidebarWidthConstraint.constant = newW
             Settings.paneSidebarWidth = newW
+            // 标题跟着左栏右移
+            self.titleLeadingConstraint?.constant = newW + 28
             self.relayoutGridColumns()
         }
 
@@ -1524,6 +1528,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 标题：当前分类 + 素材数（浮在图库之上，无背景）
         let title = NSTextField(labelWithString: "")
+        // 左边距 = 左栏宽 + 内缩 12 + 间距 16（拖拽时更新）
+        titleLeadingConstraint = NSLayoutConstraint(
+            item: title, attribute: .leading, relatedBy: .equal,
+            toItem: bar, attribute: .leading, multiplier: 1,
+            constant: sidebarWidth + 28)
         title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
@@ -1568,7 +1577,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         NSLayoutConstraint.activate([
             // 标题紧跟 logo + 软件名之后，两行整体垂直居中于 logo
-            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 160),
+            // 标题紧跟 logo + 软件名：位置随左栏宽度变化（拖拽时由 titleLeadingConstraint 更新）
+            titleLeadingConstraint,
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
             // 用「标题组中心 = logo 中心」实现对齐（logo 中心在 container.top + 47）
