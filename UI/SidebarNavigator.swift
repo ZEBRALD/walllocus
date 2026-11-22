@@ -103,10 +103,25 @@ final class SidebarNavigator: NSView {
         // 用 sidebar 材质（系统侧栏观感）+ 略重的 tint 拉开层次。
         let blur = NSVisualEffectView()
         blur.material = .sidebar
-        // .behindWindow + 不透明窗口 = 只看到软件自己的底色。
-        // 窗口已是 isOpaque=true 且有不透明背景色，屏幕背后不会透出来；
-        // 用 .withinWindow 反而会采到玻璃层自身，导致整栏发亮。
-        blur.blendingMode = .behindWindow
+        // 先在玻璃下面垫一层不透明底色：
+        // 这样无论采样模式如何，都不可能透出桌面。
+        // 光靠 blendingMode 不可靠 —— DropZoneView 覆写了 addSubview 并
+        // 把拖拽 overlay 提到最前，玻璃在那一层之上的采样结果不稳定。
+        let backing = NSView()
+        backing.wantsLayer = true
+        backing.layer?.backgroundColor = NSColor(srgbRed: 0.129, green: 0.133,
+                                                 blue: 0.145, alpha: 1.0).cgColor
+        backing.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(backing, positioned: .below, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            backing.topAnchor.constraint(equalTo: topAnchor),
+            backing.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backing.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backing.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        // 采样这层垫底色（不是窗口背景，也不是桌面）
+        blur.blendingMode = .withinWindow
         blur.state = .active
         blur.translatesAutoresizingMaskIntoConstraints = false
         // 玻璃层也要裁圆，否则它会在父视图圆角外露出直角
@@ -210,7 +225,7 @@ final class SidebarNavigator: NSView {
         addSubview(subtitleLabel)
 
         NSLayoutConstraint.activate([
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             // 顶部 40 给红绿灯（系统固定位置），标题从 46 开始
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 46),

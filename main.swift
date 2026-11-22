@@ -1087,8 +1087,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 侧栏贴窗口左上角（内缩 0）。
             // 红绿灯由系统钉在距窗口左/上约 8pt，面板只要内缩就会把它们挤到外面；
             // 贴边后面板圆角自然把它们包住在内部的留白里（照片 App 的做法）。
-            sidebar.topAnchor.constraint(equalTo: container.topAnchor),
-            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            // 面板四周留边距（左/上各 12）：玻璃下面已有不透明垫底，
+            // 不再依赖窗口背景，因此内缩是安全的。
+            sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             sidebar.widthAnchor.constraint(equalToConstant: 260),
             // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
             sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
