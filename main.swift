@@ -1286,7 +1286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.sidebarWidthConstraint.constant = newW
             Settings.paneSidebarWidth = newW
             // 标题贴着左栏右缘一起移动（12 内缩 + 16 间距）
-            self.titleLeadingConstraint?.constant = newW + 28
+            self.titleLeadingConstraint?.constant = newW + 20
             self.relayoutGridColumns()
         }
 
@@ -1533,7 +1533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         titleLeadingConstraint = NSLayoutConstraint(
             item: title, attribute: .leading, relatedBy: .equal,
             toItem: bar, attribute: .leading, multiplier: 1,
-            constant: 12 + sidebarWidth + 16)
+            constant: 12 + sidebarWidth + 8)
         title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
