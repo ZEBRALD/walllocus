@@ -109,10 +109,20 @@ final class GlassRimView: NSView {
 /// 顶部渐变遮罩：上层底色实、下层透明，让模糊层自然淡出。
 final class FadeOverlay: NSView {
     var topColor: NSColor = .black
+    var midColor: NSColor?
     var bottomColor: NSColor = .clear
 
     override func draw(_ dirtyRect: NSRect) {
-        let grad = NSGradient(starting: topColor, ending: bottomColor)
+        // 三段渐变：顶部实 → 腰部半透 → 底部透明。
+        // 单段线性渐变在深色底上看起来太生硬，加个中间色更接近系统观感。
+        let grad: NSGradient?
+        if let mid = midColor {
+            grad = NSGradient(colors: [topColor, mid, bottomColor],
+                              atLocations: [0.0, 0.55, 1.0],
+                              colorSpace: .deviceRGB)
+        } else {
+            grad = NSGradient(starting: topColor, ending: bottomColor)
+        }
         grad?.draw(in: bounds, angle: -90)
     }
 }
@@ -963,6 +973,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let paneTitle = NSTextField(labelWithString: "")
     /// 顶栏渐变模糊的遮罩（需要在 resize 时同步 frame）
     private var topFadeLayer: CAGradientLayer?
+    private var topFadeMask: CAGradientLayer?
+    private var topBlurView: NSView?
+    private var topScrim: FadeOverlay?
     private var baseGlass: NSVisualEffectView?
     private var baseTint: NSView?
     private var topTitle: NSTextField?
@@ -1420,20 +1433,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             topBlur.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
 
-        // 渐变遮罩：自绘一条「底色 → 透明」的渐变，盖在模糊层之上。
-        // 比用 CAGradientLayer 当 mask 可靠 —— mask 的 frame 与视图
-        // 布局不同步时会被裁成 0 尺寸，整层就看不见了。
-        let fadeMask = FadeOverlay()
-        fadeMask.topColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.96)
-        fadeMask.bottomColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.0)
-        fadeMask.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(fadeMask)
+        // 顶栏的渐变：从顶部较实地压暗，向下线性淡出到完全透明。
+        //
+        // 说明：NSVisualEffectView 的模糊强度本身无法做渐变
+        // （给它设 CAGradientLayer 当 mask 实测无效 —— 顶栏内部颜色恒定）。
+        // 系统照片 App 那种「模糊由上到下减弱」的观感，
+        // 实际是靠「模糊 + 上方 scrim 压实 + 下方淡出」组合出来的，
+        // 滚动时图片进入上半部会被 scrim 压住，越往下越清晰。
+        let scrim = FadeOverlay()
+        scrim.topColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.72)
+        scrim.midColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.30)
+        scrim.bottomColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.0)
+        scrim.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(scrim)
         NSLayoutConstraint.activate([
-            fadeMask.topAnchor.constraint(equalTo: bar.topAnchor),
-            fadeMask.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            fadeMask.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            fadeMask.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+            scrim.topAnchor.constraint(equalTo: bar.topAnchor),
+            scrim.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            scrim.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            scrim.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
+        self.topScrim = scrim
 
 
         searchField.placeholderString = L10n.t("top.searchPlaceholder")
@@ -1573,7 +1592,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             emptyLabel.centerYAnchor.constraint(equalTo: pane.centerYAnchor),
         ])
         // 顶部内边距：避让顶部的渐变模糊层（图库本身可以滚到它下面）
-        thumbnailGrid.setTopContentInset(72)
+        // 比顶栏高度多留 28：图片滚到顶栏下方时，
+        // 上方的渐变模糊才有作用空间（否则第一行紧贴边缘，看不出淡出）
+        thumbnailGrid.setTopContentInset(100)
 
         return pane
     }
@@ -2085,6 +2106,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     ///
     /// 图片等高：卡片高度由「可用宽 ÷ 5」按图片比例算出，
     /// 这样每张缩略图高度一致，扫视时不会参差。
+    /// 同步顶栏渐变 mask 的尺寸（CAGradientLayer 不会自动跟随）
+    private func syncTopFadeMask() {
+        guard let mask = topFadeMask, let host = topBlurView else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        mask.frame = host.bounds
+        CATransaction.commit()
+    }
+
     private func relayoutGridColumns() {
         guard window != nil else { return }
 
@@ -2101,6 +2131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             gridRows = rows
             thumbnailGrid.setGrid(columns: cols, rows: rows)
         }
+
+        syncTopFadeMask()
 
         // 卡片宽 = 网格实际可用宽度均分。缩放只改缩略图大小，列数恒为 5。
         thumbnailGrid.applyCardSize(availableWidth: thumbnailGrid.availableGridWidth,
