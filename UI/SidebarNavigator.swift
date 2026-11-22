@@ -542,7 +542,8 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
             dot.translatesAutoresizingMaskIntoConstraints = false
             v.addSubview(dot)
             NSLayoutConstraint.activate([
-                dot.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -6),
+                // 与分组行的折叠箭头同列（实测箭头中心距面板右缘 52pt）
+                dot.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -48),
                 dot.centerYAnchor.constraint(equalTo: v.centerYAnchor),
                 dot.widthAnchor.constraint(equalToConstant: 7),
                 dot.heightAnchor.constraint(equalToConstant: 7),
