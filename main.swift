@@ -1202,7 +1202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             brand.leadingAnchor.constraint(equalTo: logo.trailingAnchor, constant: 8),
             brand.centerYAnchor.constraint(equalTo: logo.centerYAnchor),
             brand.trailingAnchor.constraint(lessThanOrEqualTo: container.leadingAnchor,
-                                            constant: 260),
+                                            constant: 200),
         ])
 
         for v in [sidebar, middle, right, topBar] {
@@ -1238,7 +1238,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 左上角 12pt 边距由 logo 与面板共同体现
             sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 84),
             sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            sidebar.widthAnchor.constraint(equalToConstant: 260),
+            sidebar.widthAnchor.constraint(equalToConstant: 200),
             // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
             sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
 

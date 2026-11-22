@@ -478,7 +478,7 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         let label = NSTextField(labelWithString: title)
         label.font = NSFont.systemFont(ofSize: 12)
         label.textColor = dim ? .secondaryLabelColor : .labelColor
-        label.lineBreakMode = .byTruncatingMiddle
+        label.lineBreakMode = .byTruncatingTail
         label.translatesAutoresizingMaskIntoConstraints = false
 
         v.addSubview(img)
