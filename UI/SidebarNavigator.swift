@@ -43,11 +43,20 @@ final class SidebarNavigator: NSView {
     /// 点「新建分类」
     var onNewCategory: (() -> Void)?
 
+    /// 更新面板顶部的标题与副标题
+    func setHeader(title: String, subtitle: String) {
+        titleLabel.stringValue = title
+        subtitleLabel.stringValue = subtitle
+    }
+
     private let scroll = NSScrollView()
     private let outline = ClickOutlineView()
     private var presets: [WallpaperPreset] = []
     private var screens: [NSScreen] = []
     private var categories: [String] = []
+    /// 面板顶部的大标题与副标题（原在顶栏，现移入侧栏内部）
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let subtitleLabel = NSTextField(labelWithString: "")
     /// 每个显示器 id → 状态（由 main.swift 注入）
     var displayStatuses: [String: DisplayStatus] = [:]
     /// 「全部显示器」的聚合状态
@@ -182,6 +191,29 @@ final class SidebarNavigator: NSView {
         scroll.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scroll)
 
+        // 标题区：红绿灯下方显示「当前分类 / 素材数」。
+        // 这块在面板内部，所以红绿灯看起来嵌在左栏里（照片 App 的排布）。
+        titleLabel.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(titleLabel)
+
+        subtitleLabel.font = NSFont.systemFont(ofSize: 11)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(subtitleLabel)
+
+        NSLayoutConstraint.activate([
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 44),
+
+            subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+        ])
+
         // 内部滚动视图要跟着父视图一起裁圆，否则它铺满矩形、
         // 会把 10pt 圆角整个盖住（看起来还是直角）。
         scroll.wantsLayer = true
@@ -191,7 +223,9 @@ final class SidebarNavigator: NSView {
         NSLayoutConstraint.activate([
             // scroll 从顶栏下方开始：这样列表第一行不会被浮层压住，
             // 而左栏的毛玻璃背景由外层视图负责铺满到窗口顶端。
-            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 76 + 10),
+            // 顶部让位：红绿灯区(~40) + 标题区(~52)
+            // 面板已经从窗口顶端开始，红绿灯就嵌在它里面（照片 App 的做法）
+            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 40 + 52),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),

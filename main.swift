@@ -51,33 +51,67 @@ final class GlassRimView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override func draw(_ dirtyRect: NSRect) {
-        // 只描边、不填充。
-        // 注意 NSGradient.draw(in:path:) 会填满路径内部 —— 之前那样写
-        // 等于给整块面板刷了一层白，表现为面板整体发灰发亮、边界反而看不出。
-        //
-        // 正确做法：把圆角矩形转成描边路径，用渐变裁剪到这条描边上，
-        // 再填充。这样只有那 1pt 的边被上色。
-        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let outline = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
-        outline.lineWidth = 1
+    /// NSBezierPath → CGPath（兼容 macOS 13）
+    private static func cgPath(from path: NSBezierPath) -> CGPath {
+        let cg = CGMutablePath()
+        var pts = [NSPoint](repeating: .zero, count: 3)
+        for i in 0..<path.elementCount {
+            let type = path.element(at: i, associatedPoints: &pts)
+            switch type {
+            case .moveTo:
+                cg.move(to: pts[0])
+            case .lineTo:
+                cg.addLine(to: pts[0])
+            case .curveTo:
+                cg.addCurve(to: pts[2], control1: pts[0], control2: pts[1])
+            case .cubicCurveTo:
+                cg.addCurve(to: pts[2], control1: pts[0], control2: pts[1])
+            case .quadraticCurveTo:
+                cg.addQuadCurve(to: pts[1], control: pts[0])
+            case .closePath:
+                cg.closeSubpath()
+            @unknown default:
+                break
+            }
+        }
+        return cg
+    }
 
-        // 从外层圆角矩形里减去内层，得到「一圈」的填充区域
-        let band = NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 0),
-                                xRadius: cornerRadius, yRadius: cornerRadius)
-        let inner = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
-                                 xRadius: max(0, cornerRadius - 1),
-                                 yRadius: max(0, cornerRadius - 1))
-        band.append(inner.reversed)
+    override func draw(_ dirtyRect: NSRect) {
+        // 直接沿圆角矩形描边，再按条带填充渐变。
+        //
+        // 之前用「外框 append 内框 + evenOdd」挖洞的写法只在上边生效 ——
+        // 两个独立 NSBezierPath 合并后绕向未必形成洞，裁出来是实心块，
+        // 于是只有某一边看得到。
+        //
+        // 这里改为最稳的做法：把路径描边成 1pt 的线，用 clip 到这条线，
+        // 再填渐变。NSBezierPath 的 stroke 本身就知道怎么处理圆角。
+        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
+        path.lineWidth = 1.0
 
         NSGraphicsContext.saveGraphicsState()
-        band.addClip()
-        let grad = NSGradient(colors: [
-            NSColor(white: 1.0, alpha: 0.09),   // 下
-            NSColor(white: 1.0, alpha: 0.03),   // 腰
-            NSColor(white: 1.0, alpha: 0.12),   // 上
-        ])
-        grad?.draw(in: outline, angle: -90)
+        if let ctx = NSGraphicsContext.current?.cgContext {
+            // NSBezierPath.cgPath 要 macOS 14，部署目标是 13，手工转换
+            ctx.addPath(Self.cgPath(from: path))
+            ctx.setLineWidth(1.0)
+            ctx.replacePathWithStrokedPath()
+            ctx.clip()
+
+            let colors = [
+                NSColor(white: 1.0, alpha: 0.12).cgColor,
+                NSColor(white: 1.0, alpha: 0.03).cgColor,
+                NSColor(white: 1.0, alpha: 0.14).cgColor,
+            ] as CFArray
+            if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                     colors: colors, locations: [0, 0.5, 1]) {
+                // 自下而上：底部淡、顶部亮
+                ctx.drawLinearGradient(grad,
+                                       start: CGPoint(x: 0, y: 0),
+                                       end: CGPoint(x: 0, y: bounds.height),
+                                       options: [])
+            }
+        }
         NSGraphicsContext.restoreGraphicsState()
     }
 }
@@ -854,9 +888,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
     private let addButton = NSButton(title: "", target: nil, action: nil)
     private let paneTitle = NSTextField(labelWithString: "")
-    /// 顶栏左侧大标题（当前分类名）与副标题（素材数），照 macOS 照片的做法
-    private let headerTitle = NSTextField(labelWithString: "")
-    private let headerSubtitle = NSTextField(labelWithString: "")
     private let paneSubtitle = NSTextField(labelWithString: "")
     /// 壁纸文件详情（只读）：分辨率 / 大小 / 分类 / 位置
     private let fileInfoLabel = NSTextField(labelWithString: "")
@@ -1039,7 +1070,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
 
         NSLayoutConstraint.activate([
-            topBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            // 顶栏只覆盖中栏与右栏：左侧标题区已移入侧栏面板
+            topBar.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             topBar.topAnchor.constraint(equalTo: container.topAnchor),
             topBar.heightAnchor.constraint(equalToConstant: 76),
@@ -1047,7 +1079,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // ── 左栏：独立圆角面板 ──
             // 不再用分割线切分窗口，改成像 macOS 照片那样「嵌在窗口里的一个区域」：
             // 四周内缩 8pt、10pt 圆角、有自己的一层 liquid glass。
-            sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 76 + 8),
+            // 侧栏从窗口顶端开始：红绿灯要嵌在面板内部，
+            // 面板顶部留出 ~44pt 给它（内部列表再往下让位）。
+            sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
             sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
             sidebar.widthAnchor.constraint(equalToConstant: 260),
             // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
@@ -1226,28 +1260,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 直接叠在内容上，没有独立色块也没有下边线。
         bar.wantsLayer = true
 
-        let icon = NSImageView()
-        icon.image = NSApp.applicationIconImage
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        icon.translatesAutoresizingMaskIntoConstraints = false
-
-        // 大标题 + 副标题，替代原来的纯品牌名：
-        // 照片 App 的工具条左侧显示「日期 / 张数」，这里显示「分类 / 素材数」。
-        headerTitle.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-        headerTitle.lineBreakMode = .byTruncatingTail
-        headerTitle.translatesAutoresizingMaskIntoConstraints = false
-
-        headerSubtitle.font = NSFont.systemFont(ofSize: 11)
-        headerSubtitle.textColor = .secondaryLabelColor
-        headerSubtitle.lineBreakMode = .byTruncatingTail
-        headerSubtitle.translatesAutoresizingMaskIntoConstraints = false
-
-        let nameStack = NSStackView(views: [headerTitle, headerSubtitle])
-        nameStack.orientation = .vertical
-        nameStack.alignment = .leading
-        nameStack.spacing = 1
-        nameStack.translatesAutoresizingMaskIntoConstraints = false
-        let name = nameStack
 
         searchField.placeholderString = L10n.t("top.searchPlaceholder")
         searchField.font = NSFont.systemFont(ofSize: 12)
@@ -1263,32 +1275,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         settingsButton.action = #selector(showSettingsMenu)
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
 
-        for v in [icon, name, searchField, settingsButton] { bar.addSubview(v) }
+        for v in [searchField, settingsButton] { bar.addSubview(v) }
 
         NSLayoutConstraint.activate([
-            // 内部元素下移 28pt：上半部分留给红绿灯（与网易云同样的排布）
-            // 左边距 16：与右侧对称，也给红绿灯留出同等呼吸空间
-            icon.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
-            // 垂直位置：红绿灯占顶部 26，剩余 50 高的内容区内居中
-            // logo 垂直中心 = 红绿灯区(26) + 内容带一半(25) = y 51
-            icon.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 26 + 25),
-            icon.widthAnchor.constraint(equalToConstant: 26),
-            icon.heightAnchor.constraint(equalToConstant: 26),
-
-            name.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8),
-            name.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
-            // 给标题组一个明确宽度：它是垂直 StackView，内部标签又设了
-            // truncating，没有宽度约束时会被压成 0 宽，标题就看不见了。
-            name.widthAnchor.constraint(lessThanOrEqualToConstant: 300),
-            name.trailingAnchor.constraint(lessThanOrEqualTo: searchField.leadingAnchor, constant: -16),
-
             settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
-            settingsButton.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
+            settingsButton.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 26 + 25),
             settingsButton.widthAnchor.constraint(equalToConstant: 30),
             settingsButton.heightAnchor.constraint(equalToConstant: 28),
 
             searchField.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
-            searchField.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
+            searchField.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 26 + 25),
             searchField.widthAnchor.constraint(equalToConstant: 240),
             // 与齿轮同高，视觉上三者（logo/搜索/齿轮）在同一条水平线上
             searchField.heightAnchor.constraint(equalToConstant: 28),
@@ -1302,7 +1298,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let pane = NSView()
         pane.translatesAutoresizingMaskIntoConstraints = false
         // 中栏：最透的一层，让壁纸的冷暖色透上来
-        _ = addGlass(to: pane, material: .underWindowBackground, tint: 0.04)
+        // 中栏不铺任何玻璃：图库直接坐在窗口的深色底上（照片 App 就是这样）。
+        // 套一层毛玻璃会让缩略图像浮在一块磨砂板上，与「直接浏览图片」的观感不符。
+        pane.wantsLayer = true
 
         addButton.title = L10n.t("win.addFiles")
         addButton.bezelStyle = .rounded
@@ -2373,7 +2371,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     }
 
-    /// 顶栏标题：当前分类名 + 素材数
+    /// 标题：当前分类名 + 素材数。
+    /// 现在显示在左侧栏面板顶部（红绿灯下方），不再占顶栏。
     private func updateHeaderTitle() {
         let catName: String
         if let cat = libraryFilter {
@@ -2381,10 +2380,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         } else {
             catName = L10n.t("nav.libraryAll")
         }
-        headerTitle.stringValue = catName
-
         let count = filteredLibrary().count
-        headerSubtitle.stringValue = L10n.t("header.count", count)
+        sidebar.setHeader(title: catName, subtitle: L10n.t("header.count", count))
     }
 
     private func refreshControls() {
