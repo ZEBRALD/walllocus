@@ -103,7 +103,10 @@ final class SidebarNavigator: NSView {
         // 用 sidebar 材质（系统侧栏观感）+ 略重的 tint 拉开层次。
         let blur = NSVisualEffectView()
         blur.material = .sidebar
-        blur.blendingMode = .behindWindow
+        // .withinWindow：毛玻璃采样的是「本窗口内、这层之下的内容」，
+        // 也就是窗口自己的深色底。用 .behindWindow 会直接透到桌面壁纸，
+        // 侧栏颜色会随桌面变化，与软件本体的 UI 底色割裂。
+        blur.blendingMode = .withinWindow
         blur.state = .active
         blur.translatesAutoresizingMaskIntoConstraints = false
         // 玻璃层也要裁圆，否则它会在父视图圆角外露出直角
@@ -207,7 +210,8 @@ final class SidebarNavigator: NSView {
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 44),
+            // 顶部 40 给红绿灯（系统固定位置），标题从 46 开始
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 46),
 
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
@@ -225,7 +229,8 @@ final class SidebarNavigator: NSView {
             // 而左栏的毛玻璃背景由外层视图负责铺满到窗口顶端。
             // 顶部让位：红绿灯区(~40) + 标题区(~52)
             // 面板已经从窗口顶端开始，红绿灯就嵌在它里面（照片 App 的做法）
-            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 40 + 52),
+            // 红绿灯区(40) + 标题区(56)
+            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 40 + 56),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),

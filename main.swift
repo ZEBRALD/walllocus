@@ -1081,11 +1081,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 四周内缩 8pt、10pt 圆角、有自己的一层 liquid glass。
             // 侧栏从窗口顶端开始：红绿灯要嵌在面板内部，
             // 面板顶部留出 ~44pt 给它（内部列表再往下让位）。
-            sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
-            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            // 面板顶部贴到窗口顶：系统的红绿灯固定在 y≈8..24，
+            // 面板若下移，圆角边缘就会从按钮中间穿过（看起来像「压在边上」）。
+            // 贴顶后红绿灯完整落在面板内部的顶部留白里（照片 App 就是这样）。
+            sidebar.topAnchor.constraint(equalTo: container.topAnchor),
+            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             sidebar.widthAnchor.constraint(equalToConstant: 260),
             // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
-            sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
 
             // ── 中栏：通铺，不圆角、不内缩 ──
             middle.topAnchor.constraint(equalTo: container.topAnchor),
@@ -1095,10 +1098,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             middle.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
 
             // ── 右栏：独立圆角面板 ──
-            right.topAnchor.constraint(equalTo: container.topAnchor, constant: 76 + 8),
-            right.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            right.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+            right.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
             right.widthAnchor.constraint(equalToConstant: 300),
-            right.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            right.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
         ])
 
         w.contentView = container
@@ -1363,7 +1366,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         pane.translatesAutoresizingMaskIntoConstraints = false
         // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
         // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
-        _ = addGlass(to: pane, material: .sidebar, blending: .behindWindow,
+        // 与侧栏一致：只采样窗口内的深色底，不透到桌面
+        _ = addGlass(to: pane, material: .sidebar, blending: .withinWindow,
                      tint: 0.16, cornerRadius: 10)
         // pane 自身也裁圆，否则子视图（滚动区）会把圆角盖掉
         pane.wantsLayer = true
