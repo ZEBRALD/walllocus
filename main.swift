@@ -106,50 +106,6 @@ final class GlassRimView: NSView {
 
 
 
-/// 真正的渐变模糊层：用 CABackdropLayer（系统内部做背景模糊的类）
-/// 替代 NSVisualEffectView —— 后者的 layer 由系统托管、不接受 mask，
-/// 而 backdrop layer 可以被 CAGradientLayer 遮罩，从而让模糊强度线性衰减。
-/// 这是 macOS 照片 App 顶栏那种「上实下虚」的实现方式。
-final class BackdropView: NSView {
-    private var backdrop: CALayer?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        translatesAutoresizingMaskIntoConstraints = false
-        setupBackdrop()
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    private func setupBackdrop() {
-        guard let cls = NSClassFromString("CABackdropLayer") as? CALayer.Type else { return }
-        let layer = cls.init()
-        layer.setValue(true, forKey: "windowServerAware")
-        layer.setValue(0.85, forKey: "scale")
-        addSubview(NSView())  // 占位，保证 layer 层级
-        self.wantsLayer = true
-        self.layer?.addSublayer(layer)
-        self.backdrop = layer
-    }
-
-    override func layout() {
-        super.layout()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        backdrop?.frame = bounds
-        CATransaction.commit()
-    }
-
-    /// 设置渐变遮罩：上方 alpha 1（完全模糊）→ 下方 alpha 0（不模糊）
-    func applyFadeMask(ratio: CGFloat) {
-        guard let backdrop else { return }
-        let mask = CAGradientLayer()
-        mask.frame = bounds
-        mask.colors = [NSColor.black.cgColor, NSColor.black.cgColor, NSColor.clear.cgColor]
-        mask.locations = [0.0, NSNumber(value: Double(1.0 - ratio)), 1.0]
-        backdrop.mask = mask
-    }
-}
 /// 顶部渐变遮罩：上层底色实、下层透明，让模糊层自然淡出。
 final class FadeOverlay: NSView {
     var topColor: NSColor = .black
@@ -1456,62 +1412,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func buildTopBar() -> NSView {
         let bar = NSView()
         bar.translatesAutoresizingMaskIntoConstraints = false
-        // 顶栏 = 浮在内容上的渐变模糊层（照 macOS 照片）。
-        // 关键：NSVisualEffectView 的模糊本身不支持渐变，
-        // 必须用 CAGradientLayer 当 mask，让下层图片滚过来时逐渐淡出。
+        // 顶栏只是一个透明浮层：不再铺模糊/压暗。
+        // 内容（标题、搜索、齿轮）直接浮在图库之上。
         bar.wantsLayer = true
 
-        // BackdropView：真正的渐变模糊（CABackdropLayer + 渐变 mask）
-        let topBlur = BackdropView()
-
-        bar.addSubview(topBlur, positioned: .below, relativeTo: nil)
-        NSLayoutConstraint.activate([
-            topBlur.topAnchor.constraint(equalTo: bar.topAnchor),
-            topBlur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            topBlur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            topBlur.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
-        ])
-
-        // 顶栏的渐变：从顶部较实地压暗，向下线性淡出到完全透明。
-        //
-        // 说明：NSVisualEffectView 的模糊强度本身无法做渐变
-        // （给它设 CAGradientLayer 当 mask 实测无效 —— 顶栏内部颜色恒定）。
-        // 系统照片 App 那种「模糊由上到下减弱」的观感，
-        // 实际是靠「模糊 + 上方 scrim 压实 + 下方淡出」组合出来的，
-        // 滚动时图片进入上半部会被 scrim 压住，越往下越清晰。
-        let scrim = FadeOverlay()
-        // 模糊本身已经做了淡出，scrim 只负责一点点压暗保证文字可读
-        scrim.topColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.35)
-        scrim.midColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.12)
-        scrim.bottomColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.0)
-        scrim.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(scrim)
-        NSLayoutConstraint.activate([
-            scrim.topAnchor.constraint(equalTo: bar.topAnchor),
-            scrim.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            scrim.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            scrim.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
-        ])
-        self.topScrim = scrim
-        // 应用真正的渐变模糊：上方 45% 满强度，之后线性衰减到 0
-        topBlur.applyFadeMask(ratio: 0.45)
-
-
-        searchField.placeholderString = L10n.t("top.searchPlaceholder")
-        searchField.font = NSFont.systemFont(ofSize: 12)
-        searchField.target = self
-        searchField.action = #selector(searchChanged)
-        searchField.delegate = self
-        searchField.translatesAutoresizingMaskIntoConstraints = false
-
-        settingsButton.image = NSImage(systemSymbolName: "gearshape",
-                                       accessibilityDescription: L10n.t("top.settings"))
-        settingsButton.bezelStyle = .rounded
-        settingsButton.target = self
-        settingsButton.action = #selector(showSettingsMenu)
-        settingsButton.translatesAutoresizingMaskIntoConstraints = false
-
-        // 标题：当前分类 + 素材数，叠在渐变模糊层之上
+        // 标题：当前分类 + 素材数（浮在图库之上，无背景）
         let title = NSTextField(labelWithString: "")
         title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
@@ -1523,29 +1428,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         subtitle.lineBreakMode = .byTruncatingTail
         subtitle.translatesAutoresizingMaskIntoConstraints = false
 
-        for v in [title, subtitle, searchField, settingsButton] { bar.addSubview(v) }
+        // 搜索框
+        searchField.placeholderString = L10n.t("top.searchPlaceholder")
+        searchField.font = NSFont.systemFont(ofSize: 12)
+        searchField.isBordered = false
+        searchField.wantsLayer = true
+        searchField.layer?.cornerRadius = 14
+        searchField.layer?.backgroundColor = NSColor(white: 0, alpha: 0.28).cgColor
+        // 文字水平居中：NSSearchField 默认左对齐 + 左侧留了放大镜的位置
+        if let cell = searchField.cell as? NSSearchFieldCell {
+            cell.alignment = .center
+        }
+        searchField.alignment = .center
+        searchField.target = self
+        searchField.action = #selector(searchChanged)
+        searchField.translatesAutoresizingMaskIntoConstraints = false
 
+        // 设置齿轮
+        settingsButton.image = NSImage(systemSymbolName: "gearshape",
+                                       accessibilityDescription: L10n.t("top.settings"))
+        settingsButton.bezelStyle = .rounded
+        settingsButton.target = self
+        settingsButton.action = #selector(showSettingsMenu)
+        settingsButton.translatesAutoresizingMaskIntoConstraints = false
+
+        bar.addSubview(title)
+        bar.addSubview(subtitle)
+        bar.addSubview(searchField)
+        bar.addSubview(settingsButton)
         self.topTitle = title
         self.topSubtitle = subtitle
 
         NSLayoutConstraint.activate([
-
-            // 标题让开品牌区（logo+名字在 container 上，y 约 34~64）。
-            // 顶栏现在通栏，标题若从 12 开始会压在红绿灯上。
-            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor,
-                                            constant: 260 + 24),   // 让出左栏宽度 + 间距
-            title.topAnchor.constraint(equalTo: bar.topAnchor, constant: 14),
-
+            // 标题紧跟 logo + 软件名之后，两行整体垂直居中于 logo
+            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 160),
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
+            // 用「标题组中心 = logo 中心」实现对齐（logo 中心在 container.top + 47）
+            subtitle.centerYAnchor.constraint(equalTo: bar.topAnchor,
+                                                constant: 47 + 9),
 
             settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
-            settingsButton.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            settingsButton.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 47),
             settingsButton.widthAnchor.constraint(equalToConstant: 30),
             settingsButton.heightAnchor.constraint(equalToConstant: 28),
 
             searchField.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
-            searchField.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            searchField.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 47),
             searchField.widthAnchor.constraint(equalToConstant: 240),
             // 与齿轮同高，视觉上三者（logo/搜索/齿轮）在同一条水平线上
             searchField.heightAnchor.constraint(equalToConstant: 28),

@@ -351,10 +351,8 @@ final class ThumbnailGrid: NSView {
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
 
-            pager.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 4),
-            pager.centerXAnchor.constraint(equalTo: centerXAnchor),
-            // 贴底太挤，留一点呼吸空间（用户反馈「切页按钮太靠下」）
-            pager.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            // 分页已取消：图库直接铺到底，不再给分页条留位
+            scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
 
             collection.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             collection.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
@@ -623,7 +621,7 @@ final class ThumbnailGrid: NSView {
         prevButton.isEnabled = page > 0
         nextButton.isEnabled = page < total - 1
         // 只有一页时把整条分页器隐藏，避免占地方
-        pager.isHidden = (total <= 1)
+        pager.isHidden = true   // 已改为连续滚动，分页条不再使用
     }
 
     @objc private func goPrev() {
