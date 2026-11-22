@@ -3971,8 +3971,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 但现在右侧多了加号按钮，搜索框要往左缩一个按钮位。
         if let pane = detailPane {
             searchFieldLeftConstraint?.isActive = false
+            // 左缘贴右栏左缘（+12 与面板内缩对齐）。
+            // 右侧的搜索框 trailing 已改由加号按钮决定，宽度会自动收窄，
+            // 不需要再往左让位。
             let sc = searchField.leadingAnchor.constraint(
-                equalTo: pane.leadingAnchor, constant: 12 - 38)
+                equalTo: pane.leadingAnchor, constant: 12)
             sc.isActive = true
             searchFieldLeftConstraint = sc
         }
