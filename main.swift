@@ -506,6 +506,24 @@ enum Settings {
 
     /// 壁纸文件存放目录。首次使用时默认 ~/Pictures/WallLocus，
     /// 用户也可以改成任意目录。新添加的素材会被复制到这里集中管理。
+    /// 左栏宽度（拖拽调整后持久化）
+    static var paneSidebarWidth: CGFloat {
+        get {
+            let v = UserDefaults.standard.double(forKey: "paneSidebarWidth")
+            return v > 0 ? v : 200
+        }
+        set { UserDefaults.standard.set(Double(newValue), forKey: "paneSidebarWidth") }
+    }
+
+    /// 右栏宽度
+    static var paneDetailWidth: CGFloat {
+        get {
+            let v = UserDefaults.standard.double(forKey: "paneDetailWidth")
+            return v > 0 ? v : 300
+        }
+        set { UserDefaults.standard.set(Double(newValue), forKey: "paneDetailWidth") }
+    }
+
     static var wallpaperFolder: URL {
         get {
             let d = UserDefaults.standard
@@ -1019,8 +1037,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 右栏宽度约束
     private var rightWidthConstraint: NSLayoutConstraint!
     /// 当前栏宽（拖拽时改这两个值）
-    private var sidebarWidth: CGFloat = 200
-    private var rightWidth: CGFloat = 300
+    private var sidebarWidth: CGFloat = Settings.paneSidebarWidth
+    private var rightWidth: CGFloat = Settings.paneDetailWidth
     private var baseGlass: NSVisualEffectView?
     private var baseTint: NSView?
     private var topTitle: NSTextField?
@@ -1263,6 +1281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             let newW = min(420, max(160, self.sidebarWidth + dx))
             self.sidebarWidth = newW
             self.sidebarWidthConstraint.constant = newW
+            Settings.paneSidebarWidth = newW
             self.relayoutGridColumns()
         }
 
@@ -1275,6 +1294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             let newW = min(460, max(220, self.rightWidth - dx))
             self.rightWidth = newW
             self.rightWidthConstraint.constant = newW
+            Settings.paneDetailWidth = newW
             self.relayoutGridColumns()
         }
 
