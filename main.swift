@@ -1036,6 +1036,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var sidebarWidthConstraint: NSLayoutConstraint!
     /// 顶栏标题左边距约束（绑定左栏右缘）
     private var titleLeadingConstraint: NSLayoutConstraint?
+    /// 搜索框宽度约束（跟随右栏）
+    /// 搜索框左缘约束（绑定右栏左缘）
+    private var searchFieldLeftConstraint: NSLayoutConstraint?
+    /// 右栏容器（供搜索框绑定左缘）
+    private weak var detailPane: NSView?
     /// 顶栏标题与顶栏容器（供重启时重绑）
     private weak var topTitleView: NSTextField?
     private weak var topBarHost: NSView?
@@ -1217,6 +1222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
 
         // ── 顶栏 ──────────────────────────────────────────────
+
         let topBar = buildTopBar()
 
         // ── 三栏 ──────────────────────────────────────────────
@@ -1301,6 +1307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.rightWidth = newW
             self.rightWidthConstraint.constant = newW
             Settings.paneDetailWidth = newW
+
             self.relayoutGridColumns()
         }
 
@@ -1596,7 +1603,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
             searchField.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
             searchField.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 47),
-            searchField.widthAnchor.constraint(equalToConstant: 240),
+            // 搜索框左缘贴右栏左缘由 rebindTitleToSidebar() 在视图就位后绑定
+            searchField.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 700),
             // 与齿轮同高，视觉上三者（logo/搜索/齿轮）在同一条水平线上
             searchField.heightAnchor.constraint(equalToConstant: 28),
         ])
@@ -1699,6 +1707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     private func buildDetailPane() -> NSView {
         let pane = NSView()
+        self.detailPane = pane
         pane.translatesAutoresizingMaskIntoConstraints = false
         // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
         // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
@@ -3932,9 +3941,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func rebindTitleToSidebar() {
         guard let title = topTitleView else { return }
         titleLeadingConstraint?.isActive = false
-        let c = title.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -22)
+        let c = title.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -27)
         c.isActive = true
         titleLeadingConstraint = c
+
+        // 搜索框左缘贴右栏左缘（+12 与右栏面板内缩对齐）
+        if let pane = detailPane {
+            searchFieldLeftConstraint?.isActive = false
+            let sc = searchField.leadingAnchor.constraint(
+                equalTo: pane.leadingAnchor, constant: 12)
+            sc.isActive = true
+            searchFieldLeftConstraint = sc
+        }
     }
 
     @objc private func showPanel() {
