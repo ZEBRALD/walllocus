@@ -1071,9 +1071,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let paneTitle = NSTextField(labelWithString: "")
     /// 顶栏渐变模糊的遮罩（需要在 resize 时同步 frame）
     private var topFadeLayer: CAGradientLayer?
-    private var topFadeMask: CAGradientLayer?
-    private var topBlurView: NSView?
-    private var topScrim: FadeOverlay?
     /// 左栏宽度约束（可拖拽调整）
     private var sidebarWidthConstraint: NSLayoutConstraint!
     /// 顶栏标题左边距约束（绑定左栏右缘）
@@ -1091,7 +1088,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 右栏宽度约束
     private var rightWidthConstraint: NSLayoutConstraint!
     /// 中栏宽度约束（随左右栏变化重算）
-    private var middleWidthConstraint: NSLayoutConstraint?
     /// 右栏元素宽度约束（随栏宽更新）
     private var detailWidthConstraints: [NSLayoutConstraint] = []
     /// 当前栏宽（拖拽时改这两个值）
@@ -2314,13 +2310,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 图片等高：卡片高度由「可用宽 ÷ 5」按图片比例算出，
     /// 这样每张缩略图高度一致，扫视时不会参差。
     /// 同步顶栏渐变 mask 的尺寸（CAGradientLayer 不会自动跟随）
-    private func syncTopFadeMask() {
-        guard let mask = topFadeMask, let host = topBlurView else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        mask.frame = host.bounds
-        CATransaction.commit()
-    }
 
     private func relayoutGridColumns() {
         guard window != nil else { return }
@@ -2339,7 +2328,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             thumbnailGrid.setGrid(columns: cols, rows: rows)
         }
 
-        syncTopFadeMask()
 
         // 卡片宽 = 网格实际可用宽度均分。缩放只改缩略图大小，列数恒为 5。
         thumbnailGrid.applyCardSize(availableWidth: thumbnailGrid.availableGridWidth,
@@ -3546,6 +3534,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     @objc private func removeFromLibrary() {
         guard let item = selectedItem else { return }
+
+        // 真正把文件移到废纸篓（可恢复）。
+        // 之前只从库里删条目、文件留在文件夹，下次扫描又冒出来，
+        // 「移到废纸篓」看起来没生效。
+        let fm = FileManager.default
+        if fm.fileExists(atPath: item.path) {
+            do {
+                try fm.trashItem(at: URL(fileURLWithPath: item.path),
+                                 resultingItemURL: nil)
+            } catch {
+                flashStatus(L10n.t("error.trashFailed",
+                                   (item.path as NSString).lastPathComponent))
+                return
+            }
+        }
+
         // 素材已移除，缩略图缓存一并丢掉
         ThumbnailStore.shared.remove(for: item.path)
 
