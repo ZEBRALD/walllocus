@@ -1089,8 +1089,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 贴边后面板圆角自然把它们包住在内部的留白里（照片 App 的做法）。
             // 面板四周留边距（左/上各 12）：玻璃下面已有不透明垫底，
             // 不再依赖窗口背景，因此内缩是安全的。
-            sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
-            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            // 顶部留 10：红绿灯占 y=8..24，面板从 10 起会把按钮上半截露在外面，
+            // 但完全贴顶又会让圆角压到按钮 —— 折中用贴顶（红绿灯完整在内），
+            // 左边距必须为 0（按钮距窗口左边只有 8pt，面板一内缩就把它挤出去）。
+            sidebar.topAnchor.constraint(equalTo: container.topAnchor),
+            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             sidebar.widthAnchor.constraint(equalToConstant: 260),
             // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
             sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
@@ -1158,6 +1161,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                           blending: NSVisualEffectView.BlendingMode = .behindWindow,
                           tint: CGFloat,
                           cornerRadius: CGFloat = 0) -> NSVisualEffectView {
+        // 玻璃下面垫一层不透明底色：无论采样模式如何都不会透出桌面。
+        // （窗口虽已 isOpaque，但 DropZoneView 覆写了 addSubview 把拖拽浮层
+        //   提到最前，合成链路上玻璃可能采到窗口之外的内容。）
+        let backing = NSView()
+        backing.wantsLayer = true
+        backing.layer?.backgroundColor = NSColor(srgbRed: 0.129, green: 0.133,
+                                                 blue: 0.145, alpha: 1.0).cgColor
+        backing.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(backing, positioned: .below, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            backing.topAnchor.constraint(equalTo: host.topAnchor),
+            backing.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            backing.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            backing.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+        ])
+
         let blur = NSVisualEffectView()
         blur.material = material
         blur.blendingMode = blending
@@ -1372,7 +1391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
         // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
         // 与侧栏一致：窗口不透明，behindWindow 采到的就是软件自己的底色
-        _ = addGlass(to: pane, material: .sidebar, blending: .behindWindow,
+        _ = addGlass(to: pane, material: .sidebar, blending: .withinWindow,
                      tint: 0.42, cornerRadius: 10)
         // pane 自身也裁圆，否则子视图（滚动区）会把圆角盖掉
         pane.wantsLayer = true
