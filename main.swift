@@ -625,10 +625,12 @@ final class FullscreenMonitor {
                                         object: nil, queue: .main) { [weak self] _ in
             self?.scheduleCheck()
         })
-        let t = Timer(timeInterval: 1.5, repeats: true) { [weak self] _ in
+        // 0.5s：全屏状态一变，侧栏圆点要能马上反映出来。
+        // 这个轮询只做窗口枚举与矩形比较，开销可以忽略。
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.check()
         }
-        t.tolerance = 0.5              // 允许系统攒批触发，省电
+        t.tolerance = 0.15             // 允许系统攒批触发，省电
         RunLoop.main.add(t, forMode: .common)
         timer = t
         check()
@@ -3324,13 +3326,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let folder = Settings.wallpaperFolder
         try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
 
+        // 拖入时若正看着某个分类，就把文件放进那个子文件夹 ——
+        // 否则文件进了根目录，在当前分类里根本看不到（用户以为没加成功）。
+        let destDir: URL
+        if let cat = libraryFilter, !cat.isEmpty {
+            let sub = folder.appendingPathComponent(cat, isDirectory: true)
+            try? fm.createDirectory(at: sub, withIntermediateDirectories: true)
+            destDir = sub
+        } else {
+            destDir = folder
+        }
+
         let src = URL(fileURLWithPath: path)
         let folderPath = folder.standardizedFileURL.path
         if src.standardizedFileURL.path.hasPrefix(folderPath + "/") {
             return path      // 已在文件夹里
         }
 
-        var dest = folder.appendingPathComponent(src.lastPathComponent)
+        var dest = destDir.appendingPathComponent(src.lastPathComponent)
         // 同名冲突时加序号，绝不覆盖用户已有文件
         if fm.fileExists(atPath: dest.path) {
             let base = src.deletingPathExtension().lastPathComponent
@@ -3338,7 +3351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             var i = 2
             repeat {
                 let name = ext.isEmpty ? "\(base)-\(i)" : "\(base)-\(i).\(ext)"
-                dest = folder.appendingPathComponent(name)
+                dest = destDir.appendingPathComponent(name)
                 i += 1
             } while fm.fileExists(atPath: dest.path) && i < 1000
         }
@@ -3519,24 +3532,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                 st.library.append(LibraryItem(path: path, kind: MediaKind.detect(path)))
                 added += 1
             }
-            // 目标屏尚未指定壁纸时，自动使用第一个新加入的素材
-            guard added > 0 else { return }
-            let newPath = usable[0]
-            if targetDisplayID.isEmpty {
-                for s in screens where st.assignment[screenID(s)] == nil {
-                    st.assignment[screenID(s)] = newPath
-                }
-            } else if st.assignment[targetDisplayID] == nil {
-                st.assignment[targetDisplayID] = newPath
-            }
+            // 只入库存档，不自动铺到任何屏幕上。
+            // 加了文件就悄悄改掉别人的桌面是意外行为 —— 要用哪张由用户
+            // 显式点「设为该屏壁纸」决定。
         }
 
+        // 重扫文件夹：新文件已复制进磁盘，但库与分类都还是旧的。
+        // 不重扫的话，拖入后当前分类里看不到它（用户以为没加成功）。
+        scanWallpaperFolder()
         reloadLibrary()
-        // 选中新加入的素材
-        if added > 0, let idx = state.library.firstIndex(where: { $0.path == usable[0] }) {
+        // 选中新加入的素材，方便用户接着决定要不要用它
+        if added > 0, state.library.contains(where: { $0.path == usable[0] }) {
             StateStore.shared.update { $0.lastSelectedItem = usable[0] }
         }
-        WallpaperManager.shared.applyAll()
+        // 只刷新界面，不重铺壁纸 —— assignment 没变，重铺纯属多余。
         refreshControls()
         return added
     }
@@ -4214,6 +4223,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     private func refreshFullscreenUI(_ covered: Set<String>) {
         fullscreenMenuItem?.state = FullscreenMonitor.shared.isEnabled ? .on : .off
+
+        // 侧栏状态点要跟着变：某块屏被全屏应用盖住时它应转为橙黄。
+        // 之前这里只更新了已隐藏的底栏文字，所以圆点看起来「不刷新」。
+        let st = displayStatusMap()
+        sidebar.reload(presets: state.presets,
+                       screens: screens,
+                       categories: wallpaperCategories(),
+                       statuses: st.perDisplay,
+                       aggregate: st.aggregate,
+                       selection: sidebarSelection)
+
         guard !covered.isEmpty else {
             fullscreenLabel.stringValue = ""
             return
