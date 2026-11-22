@@ -1739,6 +1739,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         thumbnailGrid.onContextMenu = { [weak self] path, view in
             self?.makeCardMenu(path: path, view: view)
         }
+        // 中栏空白处右键：库级操作（刷新 / 添加 / 在访达显示）
+        thumbnailGrid.onBlankContextMenu = { [weak self] view in
+            self?.makeBlankMenu(view: view)
+        }
         thumbnailGrid.onDoubleClick = { [weak self] path in
             guard let self,
                   let idx = self.state.library.firstIndex(where: { $0.path == path }) else { return }
@@ -2803,6 +2807,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 卡片右键菜单
+    /// 中栏空白处的右键菜单：库级操作。
+    private func makeBlankMenu(view: NSView) -> NSMenu? {
+        let menu = NSMenu()
+
+        let refresh = NSMenuItem(title: L10n.t("library.refresh"),
+                                 action: #selector(refreshLibraryNow),
+                                 keyEquivalent: "")
+        refresh.target = self
+        menu.addItem(refresh)
+
+        let add = NSMenuItem(title: L10n.t("win.addFiles"),
+                             action: #selector(addFiles),
+                             keyEquivalent: "")
+        add.target = self
+        menu.addItem(add)
+
+        menu.addItem(.separator())
+
+        let reveal = NSMenuItem(title: L10n.t("library.revealFolder"),
+                                action: #selector(revealWallpaperFolder),
+                                keyEquivalent: "")
+        reveal.target = self
+        menu.addItem(reveal)
+
+        return menu
+    }
+
+    /// 立即重扫壁纸文件夹。
+    /// 用于在访达里增删文件、或从废纸篓复原后让 App 立刻看到变化。
+    @objc private func refreshLibraryNow() {
+        scanWallpaperFolder()
+        reloadLibrary()
+        flashStatus(L10n.t("library.refreshed"))
+    }
+
+    /// 在访达中打开当前壁纸文件夹
+    @objc private func revealWallpaperFolder() {
+        NSWorkspace.shared.open(Settings.wallpaperFolder)
+    }
+
     private func makeCardMenu(path: String, view: NSView) -> NSMenu? {
         guard let item = state.library.first(where: { $0.path == path }) else { return nil }
         let menu = NSMenu()

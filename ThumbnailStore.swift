@@ -22,9 +22,22 @@ final class ThumbnailStore {
 
     static let shared = ThumbnailStore()
 
-    /// 缩略图长边像素。112×70 的展示框在 2x 屏上需要 224px，
-    /// 但 160px 已足够「看清构图」，且内存只有 224px 的一半。
-    static let maxPixel: CGFloat = 160
+    /// 缩略图长边像素，按「实际显示尺寸 × 屏幕缩放」计算。
+    ///
+    /// 之前固定 160px：卡片在 Retina 上实际需要 400+ 像素，
+    /// 被放大 2.5 倍后看着发糊。现在按需解码，清晰度足够且不浪费。
+    static var maxPixel: CGFloat = 320
+
+    /// 根据卡片宽度与屏幕倍率更新解码尺寸。
+    /// 取整到 80 的倍数，避免窗口微调就触发整批重新解码。
+    static func updateDecodeSize(cardWidth: CGFloat, scale: CGFloat) {
+        let needed = cardWidth * scale
+        let snapped = max(160, ceil(needed / 80) * 80)
+        if abs(snapped - maxPixel) > 0.5 {
+            maxPixel = snapped
+            shared.clear()      // 旧尺寸的缓存作废
+        }
+    }
 
     /// 包一层，避免直接把 CF 类型塞进 NSCache 的桥接歧义
     private final class Box {
@@ -44,7 +57,9 @@ final class ThumbnailStore {
     private init() {
         // 100 张 × 约 75KB ≈ 7.5MB，再设 16MB 硬上限兜底
         cache.countLimit = 100
-        cache.totalCostLimit = 16 * 1024 * 1024
+        // 解码尺寸提高后单张成本约变成 4 倍，上限同步放宽，
+        // 避免滚动时频繁淘汰、反复重解码（那才是真卡顿）。
+        cache.totalCostLimit = 48 * 1024 * 1024
     }
 
     // MARK: - 查询

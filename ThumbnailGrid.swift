@@ -515,6 +515,9 @@ final class ThumbnailGrid: NSView {
             ?? ThumbnailItem.cardSize
         guard abs(newSize.width - current.width) > 0.5 else { return }
         ThumbnailItem.cardSize = newSize
+        // 卡片变大后，缩略图要按新尺寸重新解码，否则会被放大得发糊。
+        let scale = window?.backingScaleFactor ?? 2
+        ThumbnailStore.updateDecodeSize(cardWidth: newSize.width, scale: scale)
         if let layout = collection.collectionViewLayout as? NSCollectionViewFlowLayout {
             layout.itemSize = newSize
             // 同时校正间距：两者必须与算宽度时用的参数一致，
