@@ -1034,6 +1034,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var topScrim: FadeOverlay?
     /// 左栏宽度约束（可拖拽调整）
     private var sidebarWidthConstraint: NSLayoutConstraint!
+    /// 顶栏标题左边距：= 左栏宽 + 内缩 + 间距，拖拽时同步
+    private var titleLeadingConstraint: NSLayoutConstraint!
 
     /// 右栏宽度约束
     private var rightWidthConstraint: NSLayoutConstraint!
@@ -1283,6 +1285,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.sidebarWidth = newW
             self.sidebarWidthConstraint.constant = newW
             Settings.paneSidebarWidth = newW
+            // 标题贴着左栏右缘一起移动（12 内缩 + 16 间距）
+            self.titleLeadingConstraint?.constant = newW + 28
             self.relayoutGridColumns()
         }
 
@@ -1525,6 +1529,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 标题：当前分类 + 素材数（浮在图库之上，无背景）
         let title = NSTextField(labelWithString: "")
+        // 左边距 = 左栏面板右缘 + 16（12 内缩 + 宽度 + 16 间距 + 额外留白）
+        titleLeadingConstraint = NSLayoutConstraint(
+            item: title, attribute: .leading, relatedBy: .equal,
+            toItem: bar, attribute: .leading, multiplier: 1,
+            constant: 12 + sidebarWidth + 16)
         title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
@@ -1569,8 +1578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         NSLayoutConstraint.activate([
             // 标题紧跟 logo + 软件名之后，两行整体垂直居中于 logo
-            // 标题紧跟 logo + 软件名之后：固定位置，不随左栏拖拽移动
-            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 145),
+            titleLeadingConstraint,
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
             // 用「标题组中心 = logo 中心」实现对齐（logo 中心在 container.top + 47）
