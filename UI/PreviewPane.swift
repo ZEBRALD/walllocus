@@ -14,7 +14,8 @@ final class PreviewPane: NSView {
     /// 预览图长边。右栏宽 270，2x 屏需要 540，取 480 略省一点内存。
     static let previewMaxPixel: CGFloat = 480
 
-    private let imageView = NSImageView()
+    /// 与网格卡片一致的「按图片实际矩形裁圆角」视图
+    private let imageView = RoundedImageView()
     /// 包住图片的圆角容器
     private let clipBox = NSView()
 
@@ -44,12 +45,12 @@ final class PreviewPane: NSView {
         // 用容器包住图片：容器设圆角 + masksToBounds 是最可靠的裁切方式。
         // 直接给 NSImageView 设圆角/mask 都不生效 —— 图片走内部绘制路径。
         clipBox.wantsLayer = true
-        clipBox.layer?.cornerRadius = 12
         clipBox.layer?.masksToBounds = true
         clipBox.translatesAutoresizingMaskIntoConstraints = false
         addSubview(clipBox)
 
         imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.cornerRadius = 12
         imageView.translatesAutoresizingMaskIntoConstraints = false
         clipBox.addSubview(imageView)
 
