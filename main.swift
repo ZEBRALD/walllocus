@@ -2010,6 +2010,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         clearAllButtonW.isActive = true
         root.addArrangedSubview(clearAllButton)
 
+        // 操作按钮的最终顺序（按使用频率与破坏性递增排列）：
+        // 设为该屏壁纸 → 暂停 → 停止全部 → 移到废纸篓
+        //   → 移除当前显示器 → 移除所有显示器
+        // 上面是逐块构建的，这里统一按目标顺序重排一次。
+        let actionOrder: [NSView] = [
+            assignButton,
+            pauseButton,
+            stopButton,
+            removeButton,
+            clearCurrentButton,
+            clearAllButton,
+        ]
+        // 保留非操作按钮（标题、说明等）在原位，只重排操作按钮之间的相对次序
+        var rebuilt: [NSView] = []
+        for v in root.arrangedSubviews {
+            if actionOrder.contains(where: { $0 === v }) { continue }
+            rebuilt.append(v)
+        }
+        rebuilt.append(contentsOf: actionOrder)
+        root.setViews(rebuilt, in: .leading)
+
         // 兼容性警告（有问题才显示）
         warningLabel.font = NSFont.systemFont(ofSize: 11)
         warningLabel.textColor = .systemRed
