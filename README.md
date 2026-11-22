@@ -2,78 +2,91 @@
 
 > **Remember every wallpaper's placement on every display.**
 
-A tiny, hackable macOS video & image wallpaper app. `Wall` + `Locus` — it remembers the *locus* (position) of every wallpaper.
+A small, hackable macOS video and image wallpaper tool.  
+`Wall` + `Locus` — it remembers each wallpaper's **positional footprint** on every display.
 
-[简体中文](README.zh-CN.md) · English
+English · [简体中文](README.zh-CN.md)
 
 ---
 
-A self-contained macOS wallpaper app in about 1,700 lines of Swift. No third-party dependencies, no analytics, no account. Built with `swiftc` alone — you do not need a full Xcode installation.
+A self-contained macOS wallpaper app in about 7,300 lines of Swift. No third-party dependencies, no telemetry, no account. Built with nothing but `swiftc` — **no full Xcode install required**.
 
 ## What makes it different
 
-**Per-display × per-wallpaper memory.**
+**Two-dimensional memory: display × wallpaper.**
 
-Every wallpaper keeps its own scale mode, zoom and horizontal/vertical offset **on each display**, independently:
+Every wallpaper remembers its own scale mode, zoom, and horizontal/vertical offset **per display**:
 
-| Display             | Wallpaper A         | Wallpaper B        |
-| ------------------- | ------------------- | ------------------ |
-| 4K external display | 150% · offset −0.20 | 100% · centered    |
-| Laptop display      | 100% · centered     | 73% · offset +0.15 |
-| Vertical display    | 100% · offset −0.55 | 100% · centered    |
+| Display          | Wallpaper A        | Wallpaper B      |
+| ---------------- | ------------------ | ---------------- |
+| 4K external      | 150% · offset −0.20 | 100% · centred   |
+| Built-in laptop  | 100% · centred      | 73% · offset +0.15 |
+| Portrait monitor | 100% · offset −0.55 | 100% · centred   |
 
-Switch displays or wallpapers and the previous framing comes back exactly. Most wallpaper apps offer at best a global fill/fit setting; this one treats framing as a property of the *pair*.
+Swap displays or wallpapers and the previous framing comes back exactly. Most wallpaper apps offer at most one global fill/fit switch; here the framing is a property of **the pairing**.
+
+## Interface
+
+Three panes, modelled on the macOS Photos app:
+
+- **Sidebar** — displays, library categories, presets. The three groups default to Displays → Library → Presets, reorderable in settings
+- **Grid** — the library. Thumbnails tile the space, five columns, corners clipped to each image's own aspect ratio
+- **Details** — file information, framing controls, and actions for the selected item
+
+Both side panes resize by dragging their edges, and the widths persist. All three panes share one liquid-glass base whose rim tints with the wallpaper's colour temperature.
 
 ## Features
 
-- **Video and still images**, from your own files
-- **Independent wallpaper per display**, hot-plug aware
-- **Scale modes**: Fill (crop), Fit (letterbox), Stretch
-- **Zoom** 30–300% and **horizontal / vertical offset** ±100%, with editable numeric fields (two decimals) alongside each slider
-- **Auto-pause on full screen** — detects when a display is fully covered by a full-screen app (≥96% coverage) and suspends that display only
-- **Auto-pause on battery** (optional)
-- **Menu bar resident** — closing the window releases the Dock icon, the menu bar icon stays
-- **Locked-in low footprint**: AVPlayerLayer hardware decoding for video, ImageIO downsampling for stills; bitmaps are released as soon as no display uses them
-- **Compatibility check** for video: flags files macOS cannot decode and can fix HEV1 → HVC1 tags in place (no re-encode)
-- **Paginated grid library** — 4 columns by 2-4 rows depending on your display, with paging instead of scrolling. A 60-item library is five pages, not thirteen screens of horizontal scroll
-- **See what is in use** — a green dot marks wallpapers currently assigned to a display
-- **Name your wallpapers** — file names are often `4DC7C38D-B69C-4C31-A199-89C88E9474A4.JPG`, so any wallpaper can be given a name that means something. A hover tooltip keeps showing the original file name
-- **Drag files in from Finder** — drop images or videos anywhere on the panel. It blurs and dims behind the hint, so you can read the count while still seeing where you are dropping
-- **Right-click a card** to rename, revert to the file name, set as wallpaper, reveal in Finder, or remove
-- **Bilingual UI** — English and Simplified Chinese, chosen automatically from your system language
+- **Video and still images**, using your own files
+- **Per-display wallpapers**, with hot-plug support
+- **Scale modes**: fill (crop), fit (letterbox), stretch
+- **Zoom** 30–300%, **horizontal/vertical offset** ±100%, each with a type-in field beside the slider
+- **Auto-pause on fullscreen**: detects when a display is fully covered (≥96%) and pauses only that one
+- **Pause on battery** (optional)
+- **Menu bar resident**: the Dock icon hides when the window closes, the menu bar icon stays
+- **Very low overhead**: video runs through AVPlayerLayer's hardware decoding, images through ImageIO downsampling; bitmaps for displays not in use are released immediately
+- **Video compatibility check**: warns about videos macOS cannot decode, with a one-click fix that retags HEV1 as HVC1 (no re-encoding)
+- **The library is a folder**: `~/Pictures/WallLocus` by default, with each subfolder becoming a category
+- **Drag in from Finder**: drop images or videos anywhere on the window. The interface blurs and dims behind the drop hint so both the hint and the target stay legible
+- **Toolbar + button** to add wallpapers; a search field filters by file name
+- **Sorting**: by file name or modification date, ascending or descending
+- **Optional file names**: captions in the grid can be turned off, in which case each thumbnail fills its card
+- **Context menus**: on a card — set as this display's wallpaper, reveal in Finder, move to Trash; on empty space — refresh the library, add files, reveal the folder
+- **Presets**: capture which wallpaper each display uses along with its framing; right-click to apply, rename, or delete
+- **Bilingual UI**, following the system language
 
-## Measured footprint
+## Measured overhead
 
-On Apple silicon running macOS 26, three displays each showing a 2160x2880 still:
+Apple silicon, macOS 26, three displays each showing a 2160×2880 still image:
 
-| Metric                               | Value           |
-| ------------------------------------ | --------------- |
-| Physical memory (`footprint`)        | **~197 MB**     |
-| CPU, still-image displays            | **0.0 %**       |
-| CPU, 4K video display                | **1.6 – 3.4 %** |
-| CPU, while a full-screen app is open | **0.0 %**       |
-| Library of 60 wallpapers             | **+1.6 MB**     |
+| Metric                     | Value            |
+| -------------------------- | ---------------- |
+| Physical footprint         | **~197 MB**      |
+| CPU (image displays)       | **0.0 %**        |
+| CPU (4K video display)     | **1.6 – 3.4 %**  |
+| CPU (fullscreen app open)  | **0.0 %**        |
+| Library of 60 items        | **+1.6 MB**      |
 
-Memory is dominated by the decoded bitmaps, so it scales with how many displays you drive and how large your source images are — roughly 24 MB per display for a 2160x2880 source, each held once and released as soon as no display uses it.
+Memory is dominated by decoded bitmaps, so it scales with how many displays are driven and how large the sources are — roughly 24 MB per display for a 2160×2880 source, one copy each, released as soon as no display needs it.
 
-A library of 60 wallpapers adds only about 1.6 MB: thumbnails are decoded at 160px on demand, only for the cards actually on screen, and cached under a 16 MB cap. Adding files to the library never decodes anything on its own.
+The library adds very little: thumbnails decode at **their real display size × the screen scale** (about 480px on a Retina screen), only for visible cards, into a 48 MB cache. **Adding files to the library triggers no decoding at all.**
 
-CPU is the part that stays flat at zero.
+CPU is what genuinely sits at zero.
 
-> Note: `ps` RSS reads much higher (~190 MB) because it counts mapped shared system libraries. Use `footprint -p <pid>` or `vmmap --summary` for real usage.
+> Note: `ps` reports a much higher RSS (~190 MB) because it counts mapped pages from shared system libraries. Use `footprint -p <pid>` or `vmmap --summary` for the real figure.
 
 ## Requirements
 
 - macOS **13.0** or later
 - Apple silicon or Intel (build a universal binary with `UNIVERSAL=1`)
-- Xcode **Command Line Tools** only (no full Xcode, no Homebrew)
+- Only **Xcode Command Line Tools** — no full Xcode, no Homebrew
 
 ## Build
 
 ```bash
 git clone https://github.com/ZEBRALD/walllocus.git
 cd walllocus
-./build.sh                 # host architecture
+./build.sh                 # current architecture
 UNIVERSAL=1 ./build.sh     # universal binary (arm64 + x86_64)
 ```
 
@@ -87,61 +100,66 @@ xattr -dr com.apple.quarantine /Applications/WallLocus.app
 open /Applications/WallLocus.app
 ```
 
-Because this build is **ad-hoc signed and not notarized**, Gatekeeper will block the first launch. Either right-click the app and choose **Open**, or run the `xattr` command above.
+Builds are **ad-hoc signed and not notarised**, so Gatekeeper blocks the first launch. Right-click the app and choose **Open**, or run the `xattr` command above.
 
 ## Usage
 
-1. Add wallpapers either with **Add files…** or by dragging images and videos from Finder onto the panel, anywhere. Adding files never decodes anything — only wallpapers you actually apply are decoded.
-2. Choose a target under **Target display** — one screen, or all of them at once.
-3. Pick a wallpaper in the grid, then press **Set as wallpaper for this display**. A green dot marks wallpapers already in use somewhere.
-4. Adjust **scale mode / zoom / horizontal / vertical** with the sliders or by typing exact values. Changes apply live and are remembered per display × wallpaper.
+1. Add wallpapers either with the **+** button in the toolbar, or by dragging images and videos **onto the window**. Adding files triggers no decoding — only items you actually set as a wallpaper get decoded.
+2. Pick a display in the **sidebar**, or choose "All displays".
+3. Select a wallpaper in the grid and click **Set as this display's wallpaper** in the details pane. Items already assigned carry a green dot.
+4. Adjust **scale mode / zoom / horizontal / vertical** with the sliders or by typing a value. Changes apply live and are remembered per display × wallpaper.
 
-The library is a paginated grid: 4 columns, and 2 to 4 rows depending on how much room your display has. The pager hides itself when everything fits on one page. Both the row count and the paging follow the panel between displays, so a laptop screen shows 2 rows and a 4K display shows 3 or 4.
+While dragging over the window, the background blurs and dims, a dashed border appears, and the count of items to be added is shown; unsupported types are called out rather than silently ignored.
 
-While a drag is over the panel, everything underneath blurs and dims and a dashed border appears, with a count of what will be added. Unsupported files are called out rather than silently dropped.
+Rename in **Finder** — the app deliberately offers no second naming path, so what you see is the file name itself.
 
-To give a wallpaper a name that means something (file names are often UUIDs), type one into the **Name** field or right-click its card and choose **Rename…**. **Use file name** puts it back, and the original file name stays visible in the hover tooltip.
+The box at the bottom of the sidebar shows the selected display's resolution and the wallpaper currently in use. Right-click empty space in the grid to **refresh** the library, which is how files restored from the Trash show up.
 
-Everything is also reachable from the menu bar icon and from the app menu (Playback / Displays / Scale mode / Settings).
+The menu bar icon and the app menu (Playback / Scale mode / Settings) cover most operations too.
 
-## Notes on architecture
+## Architecture
 
-The wallpaper is an `NSWindow` at the desktop window level hosting an `AVPlayerLayer` (video) or a `CALayer` (image). That keeps the implementation small and dependency-free, but it has two deliberate limits:
+A wallpaper is an `NSWindow` at the desktop window level carrying either an `AVPlayerLayer` (video) or a `CALayer` (image). That keeps the implementation small and dependency-free, at the cost of two deliberate limitations:
 
-- **The wallpaper disappears when the app quits** — it is the app window, not a system wallpaper.
-- **No lock-screen wallpaper** — the lock screen is drawn by a system process that third-party windows cannot enter.
+- **Wallpapers vanish when the app quits** — they are the app's own windows, not system wallpapers.
+- **Lock screen wallpapers are not supported** — the lock screen is drawn by a system process that third-party windows cannot enter.
 
-Reaching those would require the private `WallpaperExtensionKit` framework, which is out of scope for a small utility.
+Both would need the private `WallpaperExtensionKit` framework, which is beyond the scope of a small tool.
 
-### What about a screen saver?
+### A note on screen savers
 
-A `.saver` bundle **does not work on macOS 26**: the system no longer scans
-`~/Library/Screen Savers/` and only lists ExtensionKit `.appex` extensions for
-`com.apple.screensaver`. Even Apple's own bundled `.saver` files are no longer
-registered. See [SCREENSAVER.md](SCREENSAVER.md) for the full evidence and the
-renderer code we kept for a future extension-based attempt.
+`.saver` bundles are **unusable on macOS 26**: the system no longer scans `~/Library/Screen Savers/`,
+and the Screen Saver pane only lists ExtensionKit `.appex` extensions (`com.apple.screensaver`).
+Even Apple's own bundled `.saver` files no longer register. The full evidence is in [SCREENSAVER.md](SCREENSAVER.md),
+which also keeps the rendering code written for a future extension.
 
 ## Configuration
 
-State lives in `UserDefaults` under bundle id `app.walllocus`:
+State lives in `UserDefaults` under the bundle id `app.walllocus`:
 
-- `walllocus.state.v1` — library, per-display assignment, per-display × per-wallpaper adjustments
-- `pauseOnFullscreen`, `pauseOnBattery` — behaviour toggles
+- `walllocus.state.v1` — library, per-display assignments, per-display × per-wallpaper adjustments, presets
+- `pauseOnFullscreen`, `pauseOnBattery` — behavioural switches
+- `paneSidebarWidth`, `paneDetailWidth` — pane widths
+- `showGridFileNames`, `librarySortKey`, `librarySortAscending` — grid display and sorting
+- `sidebarGroupOrder` — sidebar group order
+- `wallpaperFolder` — the wallpaper folder path
 
-Launch-at-login uses a `LaunchAgent` at `~/Library/LaunchAgents/app.walllocus.autostart.plist` (no authorization prompt, no Apple Developer account needed).
+Launch at login uses a `LaunchAgent`: `~/Library/LaunchAgents/app.walllocus.autostart.plist` (no authorisation prompt, no Apple developer account needed).
 
 ## Troubleshooting
 
-**A video shows a black screen.** It is almost certainly HEV1 packaging. macOS only decodes `hvc1`. The app detects this and offers a one-click fix that rewrites the four tag bytes in place (original kept as `*.hev1bak.mp4`).
+**Video shows black.** Almost certainly HEV1 packaging — macOS only decodes `hvc1`. The app detects this and offers a one-click fix that rewrites those four bytes in place, keeping the original as `*.hev1bak.mp4`.
 
-**Wallpaper vanished after quitting.** Expected — see *Notes on architecture*.
+**Wallpapers are gone after quitting.** Expected; see Architecture.
 
-**Dock icon is gone.** Closing the window intentionally hides it; the menu bar icon remains. Click it and choose *Open WallLocus*.
+**The Dock icon disappeared.** It hides when the window closes; the menu bar icon remains. Click it and choose "Open WallLocus".
 
-## License
+**A file added in Finder does not appear.** Right-click empty space in the grid and choose **Refresh now**, or relaunch the app.
+
+## Licence
 
 [MIT](LICENSE).
 
-## Acknowledgements
+## Credits
 
 Built and iterated with [DeepSeek Harness](https://github.com/deepseek-ai/dsh).
