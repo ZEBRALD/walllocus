@@ -108,6 +108,18 @@ final class SidebarNavigator: NSView {
             blur.trailingAnchor.constraint(equalTo: trailingAnchor),
             blur.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+        // 与右栏一致的 liquid glass 描边（侧栏的玻璃是自建的，不过 addGlass）
+        let rim = GlassRimView()
+        rim.cornerRadius = 10
+        rim.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(rim)
+        NSLayoutConstraint.activate([
+            rim.topAnchor.constraint(equalTo: topAnchor),
+            rim.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rim.trailingAnchor.constraint(equalTo: trailingAnchor),
+            rim.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
         let tint = NSView()
         tint.wantsLayer = true
         tint.layer?.backgroundColor = NSColor(white: 0, alpha: 0.10).cgColor

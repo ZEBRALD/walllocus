@@ -37,6 +37,51 @@ enum MediaKind: String, Codable {
     var label: String { self == .video ? L10n.t("kind.video") : L10n.t("kind.image") }
 }
 
+
+/// 玻璃面板的描边：沿圆角画一圈渐变高光。
+/// 上边偏亮、下边偏暗，模拟光线自上方入射时的边缘折射，
+/// 这是 macOS liquid glass 面板能在深色底上「浮起来」的关键。
+final class GlassRimView: NSView {
+    var cornerRadius: CGFloat = 10
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        translatesAutoresizingMaskIntoConstraints = false
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // 只描边、不填充。
+        // 注意 NSGradient.draw(in:path:) 会填满路径内部 —— 之前那样写
+        // 等于给整块面板刷了一层白，表现为面板整体发灰发亮、边界反而看不出。
+        //
+        // 正确做法：把圆角矩形转成描边路径，用渐变裁剪到这条描边上，
+        // 再填充。这样只有那 1pt 的边被上色。
+        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let outline = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
+        outline.lineWidth = 1
+
+        // 从外层圆角矩形里减去内层，得到「一圈」的填充区域
+        let band = NSBezierPath(roundedRect: bounds.insetBy(dx: 0, dy: 0),
+                                xRadius: cornerRadius, yRadius: cornerRadius)
+        let inner = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1),
+                                 xRadius: max(0, cornerRadius - 1),
+                                 yRadius: max(0, cornerRadius - 1))
+        band.append(inner.reversed)
+
+        NSGraphicsContext.saveGraphicsState()
+        band.addClip()
+        let grad = NSGradient(colors: [
+            NSColor(white: 1.0, alpha: 0.09),   // 下
+            NSColor(white: 1.0, alpha: 0.03),   // 腰
+            NSColor(white: 1.0, alpha: 0.12),   // 上
+        ])
+        grad?.draw(in: outline, angle: -90)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
 struct LibraryItem: Codable, Equatable {
     var path: String
     var kind: MediaKind
@@ -1082,6 +1127,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             blur.layer?.masksToBounds = true
         }
         host.addSubview(blur, positioned: .below, relativeTo: nil)
+
+           // liquid glass 的描边：一条贴着圆角的细高光。
+           // 只靠半透明填充时面板会「糊」在底色上、没有边界感；
+           // 系统这套玻璃的做法是在内侧描一圈渐变高光 ——
+           // 上边亮、下边暗，模拟光从上方来的折射。
+           if cornerRadius > 0 {
+               let rim = GlassRimView()
+               rim.cornerRadius = cornerRadius
+               rim.translatesAutoresizingMaskIntoConstraints = false
+               host.addSubview(rim)
+               NSLayoutConstraint.activate([
+                   rim.topAnchor.constraint(equalTo: host.topAnchor),
+                   rim.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+                   rim.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+                   rim.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+               ])
+           }
         NSLayoutConstraint.activate([
             blur.topAnchor.constraint(equalTo: host.topAnchor),
             blur.leadingAnchor.constraint(equalTo: host.leadingAnchor),
