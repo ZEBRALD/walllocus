@@ -736,7 +736,8 @@ final class WallpaperManager {
     /// 长期保留（不随我们的引用释放而回收，malloc_zone_pressure_relief 也无效），
     /// 单张约 24 MB，累计到约 770 MB 才收敛。因此「少解码」比「少持有」重要得多：
     /// 缓存越多，重复切换时越不会触发新解码，总占用反而更低且可控。
-    /// 取 8 以覆盖常见素材库规模（超出部分由 LRU 淘汰）。
+    /// 但每张是全屏位图（2160×2880 约 24MB），8 张就是 192MB ——
+    /// 对「同时只显示 3 张」的实际用量来说过度了，取 4 张（LRU 淘汰）。
     private let imageCacheLimit = 4
     private var imageCacheOrder: [String] = []
     private(set) var isPaused = false
@@ -1090,6 +1091,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 中栏宽度约束（随左右栏变化重算）
     /// 右栏元素宽度约束（随栏宽更新）
     private var detailWidthConstraints: [NSLayoutConstraint] = []
+    /// 搜索去抖计时器（避免每按键重建网格）
+    private var searchDebounce: Timer?
+    /// 分类列表缓存（扫描文件夹时清空）
+    private var cachedCategories: [String]?
     /// 当前栏宽（拖拽时改这两个值）
     private var sidebarWidth: CGFloat = Settings.paneSidebarWidth
     private var rightWidth: CGFloat = Settings.paneDetailWidth
@@ -2336,7 +2341,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     @objc private func searchChanged() {
         searchQuery = searchField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        reloadLibrary()
+        // 去抖 200ms：连续输入时只在停顿后重排一次网格。
+        // 每次按键都全量过滤 + 重建网格与侧栏，309 个素材下能明显感到卡。
+        searchDebounce?.invalidate()
+        searchDebounce = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: false) { [weak self] _ in
+            self?.reloadLibrary()
+        }
     }
 
     /// 过滤图库：只匹配素材名（自定义名称 + 原始文件名）。
@@ -3369,6 +3379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         guard !found.isEmpty || !state.library.isEmpty else { return }
 
+        cachedCategories = nil   // 目录结构可能变了
         StateStore.shared.update { st in
             // 以文件夹为准重建库：保留已有条目的别名，新增的补上，
             // 文件已不存在的移除。
@@ -3418,6 +3429,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     /// 壁纸文件夹下的所有分类（子文件夹名），按名称排序
     private func wallpaperCategories() -> [String] {
+        // 缓存结果：分类只在扫描文件夹时才会变，
+        // 而 reloadLibrary 会被搜索 / 选中 / 状态刷新频繁调用，
+        // 每次都扫一遍目录是纯浪费。
+        if let cached = cachedCategories { return cached }
         let fm = FileManager.default
         let folder = Settings.wallpaperFolder
         guard let names = try? fm.contentsOfDirectory(atPath: folder.path) else { return [] }
@@ -3429,7 +3444,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                 dirs.append(n)
             }
         }
-        return dirs.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        let result = dirs.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        cachedCategories = result
+        return result
     }
 
     /// 新建一个分类（= 壁纸文件夹下的子文件夹）

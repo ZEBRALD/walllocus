@@ -569,8 +569,11 @@ final class ThumbnailGrid: NSView {
                 inUse: Set<String>,
                 selectedPath: String?,
                 resetPage: Bool = false) {
-        let contentChanged = (items.count != allItems.count)
-            || (items.map { $0.path } != allItems.map { $0.path })
+        // 只比数量与首尾项：完整比较要建两个 300+ 元素的数组，
+        // 而过滤/增删必然改变数量，首尾抽样足以识别排序变化。
+        let contentChanged = items.count != allItems.count
+            || items.first?.path != allItems.first?.path
+            || items.last?.path != allItems.last?.path
         allItems = items
         inUsePaths = inUse
         // 素材集合变了（搜索过滤、增删）就回到第 1 页，

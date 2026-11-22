@@ -145,7 +145,9 @@ final class PreviewCache {
     private init() {
         // 只留最近几张；预览一次只看一个
         cache.countLimit = 6
-        cache.totalCostLimit = 48 * 1024 * 1024
+        // 只留 6 张，按 480px 长边算 6 张约 5MB；
+        // 48MB 相当于允许 50 张，与 countLimit 矛盾且白占内存。
+        cache.totalCostLimit = 12 * 1024 * 1024
     }
 
     func cached(path: String) -> CGImage? {
