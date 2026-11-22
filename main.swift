@@ -1034,9 +1034,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var topScrim: FadeOverlay?
     /// 左栏宽度约束（可拖拽调整）
     private var sidebarWidthConstraint: NSLayoutConstraint!
-    /// 顶栏标题左边距：= 左栏宽 + 内缩 + 间距，拖拽时同步
-    private var titleLeadingConstraint: NSLayoutConstraint!
-
+    /// 顶栏标题左边距约束（绑定左栏右缘）
+    private var titleLeadingConstraint: NSLayoutConstraint?
+    /// 顶栏标题与顶栏容器（供重启时重绑）
+    private weak var topTitleView: NSTextField?
+    private weak var topBarHost: NSView?
     /// 右栏宽度约束
     private var rightWidthConstraint: NSLayoutConstraint!
     /// 当前栏宽（拖拽时改这两个值）
@@ -1285,8 +1287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.sidebarWidth = newW
             self.sidebarWidthConstraint.constant = newW
             Settings.paneSidebarWidth = newW
-            // 标题贴着左栏右缘一起移动（12 内缩 + 16 间距）
-            self.titleLeadingConstraint?.constant = newW + 20
+
             self.relayoutGridColumns()
         }
 
@@ -1306,6 +1307,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         for v in [sidebar, middle, right, topBar, leftHandle, rightHandle] {
             container.addSubview(v)
         }
+
+        // 视图都进层级后再把标题绑到左栏右缘：
+        // 跨视图约束若在 sidebar 加入层级前建立会崩。
+        rebindTitleToSidebar()
 
         // 顶栏通栏后会盖住品牌区（logo + 名字），把品牌区提到最前，
         // 让它在渐变浮层之上显示。
@@ -1529,11 +1534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 标题：当前分类 + 素材数（浮在图库之上，无背景）
         let title = NSTextField(labelWithString: "")
-        // 左边距 = 左栏面板右缘 + 16（12 内缩 + 宽度 + 16 间距 + 额外留白）
-        titleLeadingConstraint = NSLayoutConstraint(
-            item: title, attribute: .leading, relatedBy: .equal,
-            toItem: bar, attribute: .leading, multiplier: 1,
-            constant: 12 + sidebarWidth + 8)
+
         title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
@@ -1574,11 +1575,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         bar.addSubview(searchField)
         bar.addSubview(settingsButton)
         self.topTitle = title
+        self.topTitleView = title
+        self.topBarHost = bar
         self.topSubtitle = subtitle
 
         NSLayoutConstraint.activate([
             // 标题紧跟 logo + 软件名之后，两行整体垂直居中于 logo
-            titleLeadingConstraint,
+            // 位置在这里只是占位，稍后 rebindTitle() 会改成绑定左栏右缘
+            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 200),
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
             // 用「标题组中心 = logo 中心」实现对齐（logo 中心在 container.top + 47）
@@ -3921,6 +3925,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let title = WallpaperManager.shared.isPaused ? L10n.t("win.resume") : L10n.t("win.pause")
         pauseButton.title = title
         pauseMenuItem?.title = title
+    }
+
+    /// 把顶栏标题绑到左栏右缘（间距 8）。
+    /// 必须在 sidebar 已加入视图层级之后调用，否则跨视图约束会崩。
+    private func rebindTitleToSidebar() {
+        guard let title = topTitleView else { return }
+        titleLeadingConstraint?.isActive = false
+        let c = title.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -22)
+        c.isActive = true
+        titleLeadingConstraint = c
     }
 
     @objc private func showPanel() {
