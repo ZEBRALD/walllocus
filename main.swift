@@ -1772,6 +1772,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 显示器信息
 
+        // 文件名标题：与预览图同宽，字号与之前的「全部显示器」一致
+        paneTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        paneTitle.lineBreakMode = .byTruncatingMiddle
+        paneTitle.translatesAutoresizingMaskIntoConstraints = false
+        let fileTitleW = paneTitle.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(fileTitleW)
+        fileTitleW.isActive = true
+        root.addArrangedSubview(paneTitle)
+
         // 当前素材的大图预览：给"选中了什么"一个明确的视觉锚点
         previewPane.translatesAutoresizingMaskIntoConstraints = false
         let previewPaneW = previewPane.widthAnchor.constraint(equalToConstant: 270)
@@ -2692,6 +2701,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             scopeLabel.stringValue = L10n.t("win.scope.none")
 
             sidebar.setInfo(title: L10n.t("win.scope.none"), subtitle: "")
+            paneTitle.stringValue = ""
             previewPane.show(path: nil, fallbackText: L10n.t("preview.noSelection"))
             updateFileInfo(for: nil)
             adjustControlsEnabled(false)
@@ -2730,6 +2740,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         } else {
             sidebar.setInfo(title: scopeName, subtitle: item.displayName)
         }
+        // 预览图上方的文件名标题
+        paneTitle.stringValue = item.displayName
         // 右栏大图预览：此前只更新了标题与副标题，从未调用 previewPane.show，
         // 所以选中素材时预览区一直空白（用户反馈的 bug）。
         previewPane.show(path: item.path, fallbackText: L10n.t("preview.noImage"))
