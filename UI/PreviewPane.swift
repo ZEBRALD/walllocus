@@ -31,13 +31,17 @@ final class PreviewPane: NSView {
 
     private func setup() {
         wantsLayer = true
-        layer?.cornerRadius = 8
+        // 预览图圆角（比之前大一些，与卡片风格一致）
+        layer?.cornerRadius = 12
         layer?.masksToBounds = true
-        layer?.backgroundColor = NSColor(white: 0.16, alpha: 1).cgColor
-        layer?.borderWidth = 1
-        layer?.borderColor = NSColor(white: 1, alpha: 0.08).cgColor
+        // 底色透明：图片自己就是内容，不需要「相框」
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.borderWidth = 0
 
         imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.wantsLayer = true
+        imageView.layer?.cornerRadius = 12
+        imageView.layer?.masksToBounds = true
         imageView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(imageView)
 

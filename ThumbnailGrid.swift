@@ -109,8 +109,9 @@ final class ThumbnailItem: NSCollectionViewItem {
         thumbView.wantsLayer = true
         thumbView.layer?.cornerRadius = 8
         thumbView.layer?.masksToBounds = true
-        thumbView.layer?.masksToBounds = true
-        thumbView.layer?.backgroundColor = NSColor(white: 0.16, alpha: 1).cgColor
+        // 不加底色：图片按比例缩放后若有留边，就让它透出底层玻璃，
+        // 否则会看到一圈深灰的「相框」。
+        thumbView.layer?.backgroundColor = NSColor.clear.cgColor
         thumbView.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(thumbView)
 
