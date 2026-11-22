@@ -3993,7 +3993,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func rebindTitleToSidebar() {
         guard let title = topTitleView else { return }
         titleLeadingConstraint?.isActive = false
-        let c = title.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -27)
+        let c = title.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -67)
         c.isActive = true
         titleLeadingConstraint = c
 
