@@ -95,7 +95,7 @@ final class SidebarNavigator: NSView {
 
     private func setup() {
         wantsLayer = true
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = 16
         layer?.masksToBounds = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
@@ -126,7 +126,7 @@ final class SidebarNavigator: NSView {
         blur.translatesAutoresizingMaskIntoConstraints = false
         // 玻璃层也要裁圆，否则它会在父视图圆角外露出直角
         blur.wantsLayer = true
-        blur.layer?.cornerRadius = 10
+        blur.layer?.cornerRadius = 16
         blur.layer?.masksToBounds = true
         addSubview(blur, positioned: .below, relativeTo: nil)
         NSLayoutConstraint.activate([
@@ -137,7 +137,7 @@ final class SidebarNavigator: NSView {
         ])
         // 与右栏一致的 liquid glass 描边（侧栏的玻璃是自建的，不过 addGlass）
         let rim = GlassRimView()
-        rim.cornerRadius = 10
+        rim.cornerRadius = 16
         rim.translatesAutoresizingMaskIntoConstraints = false
         addSubview(rim)
         NSLayoutConstraint.activate([
@@ -241,7 +241,7 @@ final class SidebarNavigator: NSView {
         // 内部滚动视图要跟着父视图一起裁圆，否则它铺满矩形、
         // 会把 10pt 圆角整个盖住（看起来还是直角）。
         scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = 10
+        scroll.layer?.cornerRadius = 16
         scroll.layer?.masksToBounds = true
         // 透明背景：让整栏颜色一致，不要出现「标题区深、列表区浅」的断层
         scroll.drawsBackground = false

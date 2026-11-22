@@ -42,76 +42,48 @@ enum MediaKind: String, Codable {
 /// 上边偏亮、下边偏暗，模拟光线自上方入射时的边缘折射，
 /// 这是 macOS liquid glass 面板能在深色底上「浮起来」的关键。
 final class GlassRimView: NSView {
-    var cornerRadius: CGFloat = 10
+    /// 与面板一致的圆角（Vorssaint 用 16pt，macOS 15 的系统面板也是这个量级）
+    var cornerRadius: CGFloat = 16
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        wantsLayer = true
         translatesAutoresizingMaskIntoConstraints = false
+        // 透明、不拦截点击 —— 它只是一层装饰
+        wantsLayer = false
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    /// NSBezierPath → CGPath（兼容 macOS 13）
-    private static func cgPath(from path: NSBezierPath) -> CGPath {
-        let cg = CGMutablePath()
-        var pts = [NSPoint](repeating: .zero, count: 3)
-        for i in 0..<path.elementCount {
-            let type = path.element(at: i, associatedPoints: &pts)
-            switch type {
-            case .moveTo:
-                cg.move(to: pts[0])
-            case .lineTo:
-                cg.addLine(to: pts[0])
-            case .curveTo:
-                cg.addCurve(to: pts[2], control1: pts[0], control2: pts[1])
-            case .cubicCurveTo:
-                cg.addCurve(to: pts[2], control1: pts[0], control2: pts[1])
-            case .quadraticCurveTo:
-                cg.addQuadCurve(to: pts[1], control: pts[0])
-            case .closePath:
-                cg.closeSubpath()
-            @unknown default:
-                break
-            }
-        }
-        return cg
-    }
+    override var isOpaque: Bool { false }
 
     override func draw(_ dirtyRect: NSRect) {
-        // 直接沿圆角矩形描边，再按条带填充渐变。
+        // 照 Vorssaint 的做法：等宽 1pt 描边，四边亮度一致。
         //
-        // 之前用「外框 append 内框 + evenOdd」挖洞的写法只在上边生效 ——
-        // 两个独立 NSBezierPath 合并后绕向未必形成洞，裁出来是实心块，
-        // 于是只有某一边看得到。
-        //
-        // 这里改为最稳的做法：把路径描边成 1pt 的线，用 clip 到这条线，
-        // 再填渐变。NSBezierPath 的 stroke 本身就知道怎么处理圆角。
+        // 之前用「挖洞 + 渐变填充环」的写法不均匀 —— 顶部亮、底部几乎看不见，
+        // 看起来就像只有某一边有边。Vorssaint 的二进制里是
+        // setBorderWidth: / setBorderColor:，也就是最朴素的等宽描边。
         let r = bounds.insetBy(dx: 0.5, dy: 0.5)
         let path = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
-        path.lineWidth = 1.0
+        path.lineWidth = 1
 
+        // 必须比面板明显亮：面板本身约 55/255，12% 白只到 60，差 5 看不出。
+        // 实测 Vorssaint 的边比内部亮约 30，取 0.20 白更接近。
+        NSColor(white: 1.0, alpha: 0.20).setStroke()
+        path.stroke()
+
+        // 额外的「顶部高光」：只在上方 ~35% 区域叠一层更亮的渐变，
+        // 让面板看起来有光从上面打下。这是与等宽边框分开的一层，
+        // 所以不会破坏四边的均匀性。
         NSGraphicsContext.saveGraphicsState()
-        if let ctx = NSGraphicsContext.current?.cgContext {
-            // NSBezierPath.cgPath 要 macOS 14，部署目标是 13，手工转换
-            ctx.addPath(Self.cgPath(from: path))
-            ctx.setLineWidth(1.0)
-            ctx.replacePathWithStrokedPath()
-            ctx.clip()
-
-            let colors = [
-                NSColor(white: 1.0, alpha: 0.12).cgColor,
-                NSColor(white: 1.0, alpha: 0.03).cgColor,
-                NSColor(white: 1.0, alpha: 0.14).cgColor,
-            ] as CFArray
-            if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                     colors: colors, locations: [0, 0.5, 1]) {
-                // 自下而上：底部淡、顶部亮
-                ctx.drawLinearGradient(grad,
-                                       start: CGPoint(x: 0, y: 0),
-                                       end: CGPoint(x: 0, y: bounds.height),
-                                       options: [])
-            }
-        }
+        let highlight = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
+        highlight.addClip()
+        let grad = NSGradient(colors: [
+            NSColor(white: 1.0, alpha: 0.16),   // 顶部
+            NSColor(white: 1.0, alpha: 0.0),    // 到 35% 处淡出
+        ])
+        // 只画上方一小条，模拟顶部边缘的反射
+        let topBand = NSRect(x: 0, y: bounds.height - bounds.height * 0.35,
+                             width: bounds.width, height: bounds.height * 0.35)
+        grad?.draw(in: topBand, angle: -90)
         NSGraphicsContext.restoreGraphicsState()
     }
 }
@@ -1490,10 +1462,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
         // 与侧栏一致：窗口不透明，behindWindow 采到的就是软件自己的底色
         _ = addGlass(to: pane, material: .sidebar, blending: .withinWindow,
-                     tint: 0.42, cornerRadius: 10)
+                     tint: 0.42, cornerRadius: 16)
         // pane 自身也裁圆，否则子视图（滚动区）会把圆角盖掉
         pane.wantsLayer = true
-        pane.layer?.cornerRadius = 10
+        pane.layer?.cornerRadius = 16
         pane.layer?.masksToBounds = true
 
         let root = NSStackView()
