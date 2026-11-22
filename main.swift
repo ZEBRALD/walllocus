@@ -1046,6 +1046,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private weak var topBarHost: NSView?
     /// 右栏宽度约束
     private var rightWidthConstraint: NSLayoutConstraint!
+    /// 中栏宽度约束（随左右栏变化重算）
+    private var middleWidthConstraint: NSLayoutConstraint!
     /// 当前栏宽（拖拽时改这两个值）
     private var sidebarWidth: CGFloat = Settings.paneSidebarWidth
     private var rightWidth: CGFloat = Settings.paneDetailWidth
@@ -1282,6 +1284,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 宽度约束先建好（后面拖拽时改 constant）
         sidebarWidthConstraint = sidebar.widthAnchor.constraint(equalToConstant: sidebarWidth)
         rightWidthConstraint = right.widthAnchor.constraint(equalToConstant: rightWidth)
+        // 中栏宽度 = 窗口宽 - 左栏 - 右栏 - 间距（12+8+8+12）
+        middleWidthConstraint = middle.widthAnchor.constraint(
+            equalToConstant: max(200, 1100 - sidebarWidth - rightWidth - 40))
 
         // ── 栏间拖拽条 ──
         let leftHandle = ResizeHandle()
@@ -1293,7 +1298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.sidebarWidth = newW
             self.sidebarWidthConstraint.constant = newW
             Settings.paneSidebarWidth = newW
-
+            self.updateMiddleWidth()
             self.relayoutGridColumns()
         }
 
@@ -1307,7 +1312,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.rightWidth = newW
             self.rightWidthConstraint.constant = newW
             Settings.paneDetailWidth = newW
-
+            self.updateMiddleWidth()
             self.relayoutGridColumns()
         }
 
@@ -1358,7 +1363,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             middle.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 8),
             middle.trailingAnchor.constraint(equalTo: right.leadingAnchor, constant: -8),
             middle.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            middle.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
+            // 中栏宽度 = 窗口宽 - 左栏 - 右栏 - 所有间距
+            // 用精确约束而非 >=，否则拖宽右栏时总宽溢出会把窗口撑大
+            middleWidthConstraint,
 
             // ── 右栏：独立圆角面板 ──
             // 右栏在顶栏浮层下方开始，留出可见的缝
@@ -1381,6 +1388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         ])
 
         w.contentView = container
+
         w.delegate = self
         window = w
 
@@ -1392,7 +1400,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 算出的卡片偏大 → 这一帧是 4 列，下一帧又变 5 列，来回跳。
             // 推到下一轮 runloop，此时新宽度已生效，一次算准。
             DispatchQueue.main.async {
-                self?.relayoutGridColumns()
+                self?.updateMiddleWidth()
+            self?.relayoutGridColumns()
             }
         }
 
@@ -3934,6 +3943,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let title = WallpaperManager.shared.isPaused ? L10n.t("win.resume") : L10n.t("win.pause")
         pauseButton.title = title
         pauseMenuItem?.title = title
+    }
+
+    /// 重算中栏宽度：拖左右栏时保持三栏之和 = 窗口宽，避免溢出撑大窗口。
+    private func updateMiddleWidth() {
+        guard let w = window else { return }
+        let avail = w.frame.width - sidebarWidth - rightWidth - 40
+        middleWidthConstraint.constant = max(200, avail)
     }
 
     /// 把顶栏标题绑到左栏右缘（间距 8）。
