@@ -1435,10 +1435,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         searchField.wantsLayer = true
         searchField.layer?.cornerRadius = 14
         searchField.layer?.backgroundColor = NSColor(white: 0, alpha: 0.28).cgColor
-        // 文字水平居中：NSSearchField 默认左对齐 + 左侧留了放大镜的位置
-        if let cell = searchField.cell as? NSSearchFieldCell {
-            cell.alignment = .center
-        }
+        // 换成垂直居中的 cell（保留放大镜与清除按钮）
+        let searchCell = VerticallyCenteredSearchCell()
+        searchCell.alignment = .center
+        searchCell.placeholderString = L10n.t("top.searchPlaceholder")
+        searchField.cell = searchCell
         searchField.alignment = .center
         searchField.target = self
         searchField.action = #selector(searchChanged)
@@ -3925,6 +3926,42 @@ extension AppDelegate: NSMenuDelegate {
 ///
 /// 关掉 NSTextField 的 border 后，标准 cell 会把文字画在框的上沿，
 /// 看起来「文字没对齐」。重写 drawingRect 让它在整个 cell 高度内居中。
+/// 垂直居中的搜索框 cell。
+/// NSSearchField 必须用 NSSearchFieldCell 才能保留放大镜/清除按钮，
+/// 所以不能直接换成 VerticallyCenteredFieldCell，只能子类化后覆写绘制矩形。
+final class VerticallyCenteredSearchCell: NSSearchFieldCell {
+    override func drawingRect(forBounds rect: NSRect) -> NSRect {
+        var r = super.drawingRect(forBounds: rect)
+        let textH = attributedStringValue.size().height
+        if textH > 0 && textH < r.height {
+            let dy = (r.height - textH) / 2
+            r.origin.y += dy
+            r.size.height = textH
+        }
+        return r
+    }
+
+    override func edit(withFrame rect: NSRect,
+                       in controlView: NSView,
+                       editor textObj: NSText,
+                       delegate: Any?,
+                       event: NSEvent?) {
+        super.edit(withFrame: drawingRect(forBounds: rect),
+                   in: controlView, editor: textObj,
+                   delegate: delegate, event: event)
+    }
+
+    override func select(withFrame rect: NSRect,
+                         in controlView: NSView,
+                         editor textObj: NSText,
+                         delegate: Any?,
+                         start selStart: Int,
+                         length selLength: Int) {
+        super.select(withFrame: drawingRect(forBounds: rect),
+                     in: controlView, editor: textObj,
+                     delegate: delegate, start: selStart, length: selLength)
+    }
+}
 final class VerticallyCenteredFieldCell: NSTextFieldCell {
     var horizontalInset: CGFloat = 7
 
