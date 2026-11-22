@@ -373,6 +373,15 @@ final class ThumbnailGrid: NSView {
     /// 按可用宽度与列数算出卡片尺寸。
     /// 宽度必须精确等于「可用宽 / 列数」：NSCollectionViewFlowLayout 只要一行塞得下
     /// 就会多塞，卡片稍窄就会出现比设定更多的列（实测出现过 5 列、7 列）。
+    /// 设置内容顶部内边距。
+    ///
+    /// 图库现在从面板顶端开始（图片能滚到顶部渐变模糊层下方），
+    /// 但初始位置要避开那层，否则第一行会被模糊遮住。
+    func setTopContentInset(_ inset: CGFloat) {
+        scroll.automaticallyAdjustsContentInsets = false
+        scroll.contentInsets = NSEdgeInsets(top: inset, left: 0, bottom: 0, right: 0)
+    }
+
     /// 网格真正可用的宽度（集合视图的实际宽度）。
     /// 用它而不是从窗口尺寸反推：后者是估算，窗口缩放时会与真实宽度
     /// 有几像素偏差，导致 FlowLayout 时而塞得下 5 列、时而只剩 4 列 ——
@@ -399,12 +408,22 @@ final class ThumbnailGrid: NSView {
         let newSize = NSSize(width: clamped,
                              height: round(clamped * base.height / base.width))
 
-        guard abs(newSize.width - ThumbnailItem.cardSize.width) > 0.5 else { return }
+        // 用 layout 的真实 itemSize 做比较，而不是静态变量 cardSize：
+        // 两者可能不同步（setGrid 重建 layout 后 cardSize 没变），
+        // 拿 cardSize 判断会导致 layout 永不更新。
+        let current = (collection.collectionViewLayout as? NSCollectionViewFlowLayout)?.itemSize
+            ?? ThumbnailItem.cardSize
+        guard abs(newSize.width - current.width) > 0.5 else { return }
         ThumbnailItem.cardSize = newSize
         if let layout = collection.collectionViewLayout as? NSCollectionViewFlowLayout {
             layout.itemSize = newSize
+            // 同时校正间距：两者必须与算宽度时用的参数一致，
+            // 否则 FlowLayout 会按旧间距排出比预期少的列数。
+            layout.minimumInteritemSpacing = 10
+            layout.minimumLineSpacing = 12
+            layout.sectionInset = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 10)
+            layout.invalidateLayout()
             collection.collectionViewLayout = layout
-            collection.collectionViewLayout?.invalidateLayout()
         }
         for case let item as ThumbnailItem in collection.visibleItems() {
             item.refreshCardSize()

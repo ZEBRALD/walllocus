@@ -116,6 +116,18 @@ final class GlassRimView: NSView {
     }
 }
 
+
+/// 顶部渐变遮罩：上层底色实、下层透明，让模糊层自然淡出。
+final class FadeOverlay: NSView {
+    var topColor: NSColor = .black
+    var bottomColor: NSColor = .clear
+
+    override func draw(_ dirtyRect: NSRect) {
+        let grad = NSGradient(starting: topColor, ending: bottomColor)
+        grad?.draw(in: bounds, angle: -90)
+    }
+}
+
 struct LibraryItem: Codable, Equatable {
     var path: String
     var kind: MediaKind
@@ -888,6 +900,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
     private let addButton = NSButton(title: "", target: nil, action: nil)
     private let paneTitle = NSTextField(labelWithString: "")
+    /// 顶栏渐变模糊的遮罩（需要在 resize 时同步 frame）
+    private var topFadeLayer: CAGradientLayer?
+    private var topTitle: NSTextField?
+    private var topSubtitle: NSTextField?
+    private var topFadeHost: NSView?
     private let paneSubtitle = NSTextField(labelWithString: "")
     /// 壁纸文件详情（只读）：分辨率 / 大小 / 分类 / 位置
     private let fileInfoLabel = NSTextField(labelWithString: "")
@@ -1105,7 +1122,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             topBar.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             topBar.topAnchor.constraint(equalTo: container.topAnchor),
-            topBar.heightAnchor.constraint(equalToConstant: 76),
+            // 72 = 标题两行(34) + 淡出过渡区(38)
+            topBar.heightAnchor.constraint(equalToConstant: 72),
 
             // ── 左栏：独立圆角面板 ──
             // 不再用分割线切分窗口，改成像 macOS 照片那样「嵌在窗口里的一个区域」：
@@ -1310,9 +1328,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func buildTopBar() -> NSView {
         let bar = NSView()
         bar.translatesAutoresizingMaskIntoConstraints = false
-        // 顶栏不再铺毛玻璃：macOS 照片的工具条是透明浮层，
-        // 直接叠在内容上，没有独立色块也没有下边线。
+        // 顶栏 = 浮在内容上的渐变模糊层（照 macOS 照片）。
+        // 关键：NSVisualEffectView 的模糊本身不支持渐变，
+        // 必须用 CAGradientLayer 当 mask，让下层图片滚过来时逐渐淡出。
         bar.wantsLayer = true
+
+        let topBlur = NSVisualEffectView()
+        topBlur.material = .headerView
+        topBlur.blendingMode = .withinWindow
+        topBlur.state = .active
+        topBlur.translatesAutoresizingMaskIntoConstraints = false
+        topBlur.wantsLayer = true
+
+        bar.addSubview(topBlur, positioned: .below, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            topBlur.topAnchor.constraint(equalTo: bar.topAnchor),
+            topBlur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            topBlur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            topBlur.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+
+        // 渐变遮罩：自绘一条「底色 → 透明」的渐变，盖在模糊层之上。
+        // 比用 CAGradientLayer 当 mask 可靠 —— mask 的 frame 与视图
+        // 布局不同步时会被裁成 0 尺寸，整层就看不见了。
+        let fadeMask = FadeOverlay()
+        fadeMask.topColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.96)
+        fadeMask.bottomColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.0)
+        fadeMask.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(fadeMask)
+        NSLayoutConstraint.activate([
+            fadeMask.topAnchor.constraint(equalTo: bar.topAnchor),
+            fadeMask.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            fadeMask.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            fadeMask.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
 
 
         searchField.placeholderString = L10n.t("top.searchPlaceholder")
@@ -1329,17 +1378,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         settingsButton.action = #selector(showSettingsMenu)
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
 
-        for v in [searchField, settingsButton] { bar.addSubview(v) }
+        // 标题：当前分类 + 素材数，叠在渐变模糊层之上
+        let title = NSTextField(labelWithString: "")
+        title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        title.lineBreakMode = .byTruncatingTail
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        let subtitle = NSTextField(labelWithString: "")
+        subtitle.font = NSFont.systemFont(ofSize: 11)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.lineBreakMode = .byTruncatingTail
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+
+        for v in [title, subtitle, searchField, settingsButton] { bar.addSubview(v) }
+
+        self.topTitle = title
+        self.topSubtitle = subtitle
 
         NSLayoutConstraint.activate([
 
+            // 标题在左
+            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
+            title.topAnchor.constraint(equalTo: bar.topAnchor, constant: 12),
+
+            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
+
             settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
-            settingsButton.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 26 + 25),
+            settingsButton.centerYAnchor.constraint(equalTo: title.centerYAnchor),
             settingsButton.widthAnchor.constraint(equalToConstant: 30),
             settingsButton.heightAnchor.constraint(equalToConstant: 28),
 
             searchField.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
-            searchField.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 26 + 25),
+            searchField.centerYAnchor.constraint(equalTo: title.centerYAnchor),
             searchField.widthAnchor.constraint(equalToConstant: 240),
             // 与齿轮同高，视觉上三者（logo/搜索/齿轮）在同一条水平线上
             searchField.heightAnchor.constraint(equalToConstant: 28),
@@ -1364,9 +1435,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         addButton.action = #selector(addFiles)
         addButton.translatesAutoresizingMaskIntoConstraints = false
 
-        let toolbar = NSStackView(views: [addButton])
-        toolbar.orientation = .horizontal
-        toolbar.spacing = 8
+        // 添加按钮不再放中栏顶部：用户更倾向直接拖入图片。
+        // 按钮移到底部区域（见 buildDetailPane 末尾）。
+        let toolbar = NSStackView()
         toolbar.translatesAutoresizingMaskIntoConstraints = false
 
         thumbnailGrid.onSelect = { [weak self] path in self?.selectFromGrid(path: path) }
@@ -1395,10 +1466,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         for v in [toolbar, thumbnailGrid, emptyLabel] { pane.addSubview(v) }
 
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: pane.topAnchor, constant: 76 + 8),
+            // 添加按钮移到底部（用户更希望直接拖入图片），这里只留 0 高度占位
+            toolbar.topAnchor.constraint(equalTo: pane.topAnchor, constant: 0),
             toolbar.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 16),
 
-            thumbnailGrid.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 8),
+            // 图库从 pane 顶部开始：图片可以滚动到顶部的渐变模糊层下方
+            thumbnailGrid.topAnchor.constraint(equalTo: pane.topAnchor),
             thumbnailGrid.leadingAnchor.constraint(equalTo: pane.leadingAnchor, constant: 16),
             // 与右栏保持一致：内容自然贴边、不做外扩，
             // 滚动条到边缘的距离交给 AppKit 的 overlay 默认表现。
@@ -1408,6 +1481,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             emptyLabel.centerXAnchor.constraint(equalTo: pane.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: pane.centerYAnchor),
         ])
+        // 顶部内边距：避让顶部的渐变模糊层（图库本身可以滚到它下面）
+        thumbnailGrid.setTopContentInset(72)
+
         return pane
     }
 
@@ -1619,6 +1695,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         clearAllButton.translatesAutoresizingMaskIntoConstraints = false
         clearAllButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
         root.addArrangedSubview(clearAllButton)
+
+        // 添加文件：放在最底部。
+        // 主路径是「直接把图片拖进图库」，按钮只是兜底入口，
+        // 所以不占顶部视线焦点。
+        addButton.bezelStyle = .rounded
+        addButton.controlSize = .regular
+        addButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        root.addArrangedSubview(addButton)
 
         // 兼容性警告（有问题才显示）
         warningLabel.font = NSFont.systemFont(ofSize: 11)
@@ -2437,7 +2521,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             catName = L10n.t("nav.libraryAll")
         }
         let count = filteredLibrary().count
-        sidebar.setHeader(title: catName, subtitle: L10n.t("header.count", count))
+        // 标题现在在中栏顶部的渐变模糊层上（照照片 App）
+        topTitle?.stringValue = catName
+        topSubtitle?.stringValue = L10n.t("header.count", count)
     }
 
     private func refreshControls() {
