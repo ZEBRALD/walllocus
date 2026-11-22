@@ -1068,6 +1068,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
 
 
+        // logo：红绿灯 → logo → 左栏面板 三层纵向排列。
+        // 放在 container 上而不是 topBar 里 —— topBar 只覆盖中栏+右栏，
+        // 它的左侧不属于任何区域，放进去就看不见了。
+        let logo = NSImageView()
+        logo.image = NSApp.applicationIconImage
+        logo.imageScaling = .scaleProportionallyUpOrDown
+        logo.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(logo)
+        NSLayoutConstraint.activate([
+            logo.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            logo.topAnchor.constraint(equalTo: container.topAnchor, constant: 34),
+            logo.widthAnchor.constraint(equalToConstant: 30),
+            logo.heightAnchor.constraint(equalToConstant: 30),
+        ])
+
         for v in [sidebar, middle, right, topBar] {
             container.addSubview(v)
         }
@@ -1089,13 +1104,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 贴边后面板圆角自然把它们包住在内部的留白里（照片 App 的做法）。
             // 面板四周留边距（左/上各 12）：玻璃下面已有不透明垫底，
             // 不再依赖窗口背景，因此内缩是安全的。
-            // 面板贴窗口左上角。
-            // 原因：系统把红绿灯钉死在距窗口 8pt，且每次布局都会重置 ——
-            // 无法可靠地把它们挪进面板内。面板贴边是唯一能保证
-            // 「按钮完整嵌在面板里」的方案。
-            // 视觉上的边距由面板内部内容的缩进体现（标题 22、列表 18）。
-            sidebar.topAnchor.constraint(equalTo: container.topAnchor),
-            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            // 纵向三层：红绿灯(y8-24) → logo → 左栏面板
+            // 左上角 12pt 边距由 logo 与面板共同体现
+            sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 84),
+            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             sidebar.widthAnchor.constraint(equalToConstant: 260),
             // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
             sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
@@ -1307,6 +1319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         for v in [searchField, settingsButton] { bar.addSubview(v) }
 
         NSLayoutConstraint.activate([
+
             settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
             settingsButton.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 26 + 25),
             settingsButton.widthAnchor.constraint(equalToConstant: 30),

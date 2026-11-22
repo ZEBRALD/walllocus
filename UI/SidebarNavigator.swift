@@ -230,7 +230,8 @@ final class SidebarNavigator: NSView {
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             // 顶部 40 给红绿灯（系统固定位置），标题从 46 开始
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 46),
+            // 面板已在 logo 之下，内部不再需要为红绿灯留白
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 18),
 
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
@@ -253,7 +254,7 @@ final class SidebarNavigator: NSView {
             // 顶部让位：红绿灯区(~40) + 标题区(~52)
             // 面板已经从窗口顶端开始，红绿灯就嵌在它里面（照片 App 的做法）
             // 红绿灯区(40) + 标题区(56)
-            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 40 + 56),
+            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 18 + 52),
             // 左右各缩进 8：给选中条留出与面板边缘的呼吸
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
