@@ -1177,9 +1177,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             container.addSubview(v)
         }
 
+        // 顶栏通栏后会盖住品牌区（logo + 名字），把品牌区提到最前，
+        // 让它在渐变浮层之上显示。
+        container.addSubview(logo, positioned: .above, relativeTo: topBar)
+        container.addSubview(brand, positioned: .above, relativeTo: logo)
+
         NSLayoutConstraint.activate([
-            // 顶栏只覆盖中栏与右栏：左侧标题区已移入侧栏面板
-            topBar.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            // 顶栏通栏：从左到右贯穿整个窗口。
+            // 之前 left 绑在 sidebar.trailing，左侧品牌区不在浮层内，
+            // 那片区域没有渐变模糊，与右侧割裂。
+            topBar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             topBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             topBar.topAnchor.constraint(equalTo: container.topAnchor),
             // 72 = 标题两行(34) + 淡出过渡区(38)
@@ -1211,7 +1218,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             middle.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
 
             // ── 右栏：独立圆角面板 ──
-            right.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+            // 右栏在顶栏浮层下方开始，留出可见的缝
+            right.topAnchor.constraint(equalTo: container.topAnchor, constant: 72 + 16),
             right.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
             right.widthAnchor.constraint(equalToConstant: 300),
             right.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
@@ -1457,9 +1465,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         NSLayoutConstraint.activate([
 
-            // 标题在左
-            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
-            title.topAnchor.constraint(equalTo: bar.topAnchor, constant: 12),
+            // 标题让开品牌区（logo+名字在 container 上，y 约 34~64）。
+            // 顶栏现在通栏，标题若从 12 开始会压在红绿灯上。
+            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor,
+                                            constant: 260 + 24),   // 让出左栏宽度 + 间距
+            title.topAnchor.constraint(equalTo: bar.topAnchor, constant: 14),
 
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
