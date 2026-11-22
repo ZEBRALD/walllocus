@@ -1036,6 +1036,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var clickMonitor: Any?
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
     private let addButton = NSButton(title: "", target: nil, action: nil)
+    /// 顶栏的「添加壁纸」按钮（加号）
+    private let addFilesButton = NSButton(title: "", target: nil, action: nil)
     private let paneTitle = NSTextField(labelWithString: "")
     /// 顶栏渐变模糊的遮罩（需要在 resize 时同步 frame）
     private var topFadeLayer: CAGradientLayer?
@@ -1594,6 +1596,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         searchField.action = #selector(searchChanged)
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
+        // 添加壁纸（加号）：与齿轮同款样式
+        addFilesButton.image = NSImage(systemSymbolName: "plus",
+                                       accessibilityDescription: L10n.t("win.addFiles"))
+        addFilesButton.bezelStyle = .rounded
+        addFilesButton.target = self
+        addFilesButton.action = #selector(addFiles)
+        addFilesButton.translatesAutoresizingMaskIntoConstraints = false
+
         // 设置齿轮
         settingsButton.image = NSImage(systemSymbolName: "gearshape",
                                        accessibilityDescription: L10n.t("top.settings"))
@@ -1606,6 +1616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         bar.addSubview(subtitle)
         bar.addSubview(searchField)
         bar.addSubview(settingsButton)
+        bar.addSubview(addFilesButton)
         self.topTitle = title
         self.topTitleView = title
         self.topBarHost = bar
@@ -1626,7 +1637,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             settingsButton.widthAnchor.constraint(equalToConstant: 30),
             settingsButton.heightAnchor.constraint(equalToConstant: 28),
 
-            searchField.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -10),
+            // 加号按钮：与齿轮同尺寸、同高度，排在它左边
+            addFilesButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -8),
+            addFilesButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
+            addFilesButton.widthAnchor.constraint(equalToConstant: 30),
+            addFilesButton.heightAnchor.constraint(equalToConstant: 28),
+
+            searchField.trailingAnchor.constraint(equalTo: addFilesButton.leadingAnchor, constant: -10),
             searchField.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 47),
             // 搜索框左缘贴右栏左缘由 rebindTitleToSidebar() 在视图就位后绑定
             searchField.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 700),
@@ -1935,16 +1952,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         detailWidthConstraints.append(clearAllButtonW)
         clearAllButtonW.isActive = true
         root.addArrangedSubview(clearAllButton)
-
-        // 添加文件：放在最底部。
-        // 主路径是「直接把图片拖进图库」，按钮只是兜底入口，
-        // 所以不占顶部视线焦点。
-        addButton.bezelStyle = .rounded
-        addButton.controlSize = .regular
-        let addButtonW = addButton.widthAnchor.constraint(equalToConstant: 270)
-        detailWidthConstraints.append(addButtonW)
-        addButtonW.isActive = true
-        root.addArrangedSubview(addButton)
 
         // 兼容性警告（有问题才显示）
         warningLabel.font = NSFont.systemFont(ofSize: 11)
@@ -3960,11 +3967,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         c.isActive = true
         titleLeadingConstraint = c
 
-        // 搜索框左缘贴右栏左缘（+12 与右栏面板内缩对齐）
+        // 搜索框左缘贴右栏左缘（+12 与右栏面板内缩对齐），
+        // 但现在右侧多了加号按钮，搜索框要往左缩一个按钮位。
         if let pane = detailPane {
             searchFieldLeftConstraint?.isActive = false
             let sc = searchField.leadingAnchor.constraint(
-                equalTo: pane.leadingAnchor, constant: 12)
+                equalTo: pane.leadingAnchor, constant: 12 - 38)
             sc.isActive = true
             searchFieldLeftConstraint = sc
         }
