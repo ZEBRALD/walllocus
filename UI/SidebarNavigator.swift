@@ -99,30 +99,21 @@ final class SidebarNavigator: NSView {
         layer?.masksToBounds = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
-        // 左导航：三块区域里最「实」的一层，作为视觉基座。
-        // 用 sidebar 材质（系统侧栏观感）+ 略重的 tint 拉开层次。
-        let blur = NSVisualEffectView()
-        // 左栏：最实的一层（导航要稳定，不随壁纸晃太厉害）
-        blur.material = .sidebar
-        // 用 behindWindow：窗口本身不透明（isOpaque + 深色背景），
-        // 所以桌面不会透进来；而材质能拿到窗口背后的环境光做自适应，
-        // 这正 Vorssaint 那种「随周围变色」的来源。
-        // （之前用 withinWindow 且垫了纯色底，等于采一块死色 —— 永远不会变。）
-        // 采样本窗口内的底玻璃（含壁纸色），而不是直接采桌面
-        blur.blendingMode = .withinWindow
-        blur.state = .active
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        // 玻璃层也要裁圆，否则它会在父视图圆角外露出直角
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = 16
-        blur.layer?.masksToBounds = true
-        addSubview(blur, positioned: .below, relativeTo: nil)
+        // 左栏不再叠玻璃：底层已经铺满整窗并模糊了壁纸，
+        // 再套一层会让它被模糊两次、比中栏暗。
+        // 「浮起」由圆角 + 描边表达。
+        let tint = NSView()
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = NSColor.clear.cgColor
+        tint.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(tint)
         NSLayoutConstraint.activate([
-            blur.topAnchor.constraint(equalTo: topAnchor),
-            blur.leadingAnchor.constraint(equalTo: leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: trailingAnchor),
-            blur.bottomAnchor.constraint(equalTo: bottomAnchor),
+            tint.topAnchor.constraint(equalTo: topAnchor),
+            tint.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tint.trailingAnchor.constraint(equalTo: trailingAnchor),
+            tint.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+
         // 与右栏一致的 liquid glass 描边（侧栏的玻璃是自建的，不过 addGlass）
         let rim = GlassRimView()
         rim.cornerRadius = 16
@@ -141,22 +132,6 @@ final class SidebarNavigator: NSView {
             rim.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
-        let tint = NSView()
-        tint.wantsLayer = true
-        // 压暗：.sidebar 材质在深色底上会偏亮（它是为浅色系统 UI 设计的），
-        // 加一层更重的黑色 tint 把它拉回到与底色同色系
-        // 只留极淡一层压暗做层次，不再用 42% 黑 —— 那会把材质的自适应压死，
-        // 整栏变成一块死灰。（Vorssaint 的 SwiftUI Material 本身不带 tint。）
-        // 层次：左栏最实（导航基座），tint 最重
-        tint.layer?.backgroundColor = NSColor(white: 0, alpha: 0.22).cgColor
-        tint.translatesAutoresizingMaskIntoConstraints = false
-        blur.addSubview(tint)
-        NSLayoutConstraint.activate([
-            tint.topAnchor.constraint(equalTo: blur.topAnchor),
-            tint.leadingAnchor.constraint(equalTo: blur.leadingAnchor),
-            tint.trailingAnchor.constraint(equalTo: blur.trailingAnchor),
-            tint.bottomAnchor.constraint(equalTo: blur.bottomAnchor),
-        ])
 
         outline.headerView = nil
         outline.backgroundColor = .clear

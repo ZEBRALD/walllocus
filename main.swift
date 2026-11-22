@@ -1497,15 +1497,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func buildLibraryPane() -> NSView {
         let pane = NSView()
         pane.translatesAutoresizingMaskIntoConstraints = false
-        // 中栏：最透的一层，让壁纸的冷暖色透上来
-        // 中栏：最透的一层 —— 让壁纸缩略图的冷暖透上来。
-        // 它不圆角（是嵌套内容区，不是栏），但依然是玻璃。
-        // withinWindow：采样本窗口内、这层之下的内容 ——
-        // 也就是底玻璃模糊过的壁纸色。behindWindow 会直接采桌面，
-        // 被 baseTint 压暗后又变回纯色。
-        // 与左右栏底层保持同一档透明度
-        _ = addGlass(to: pane, material: .underWindowBackground,
-                     blending: .withinWindow, tint: 0.14)
+        // 中栏即底层本身：不额外叠玻璃。
+        // 底层（container 的 baseBlur）已经铺满整窗并模糊了桌面壁纸，
+        // 中栏直接暴露它 —— 这才是「内嵌在底层」的语义。
+        // 若再叠一层，等于对同一块内容做两次玻璃处理，
+        // 与左右栏（底层 + 各自一层）不一致，视觉上会割裂。
+        pane.wantsLayer = true
 
         addButton.title = L10n.t("win.addFiles")
         addButton.bezelStyle = .rounded
@@ -1589,8 +1586,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
         // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
         // 右栏：中等层——比左栏透一点，但比中栏实（承载滑块输入框）
-        _ = addGlass(to: pane, material: .sidebar, blending: .withinWindow,
-                     tint: 0.14, cornerRadius: 16)
+        // 右栏也不叠玻璃：与左栏、中栏共用同一块底层玻璃，
+        // 只靠圆角 + 描边 + 极淡 tint 表达「浮起」。
+        pane.wantsLayer = true
+        let rightTint = NSView()
+        rightTint.wantsLayer = true
+        rightTint.layer?.backgroundColor = NSColor.clear.cgColor
+        rightTint.translatesAutoresizingMaskIntoConstraints = false
+        rightTint.wantsLayer = true
+        rightTint.layer?.cornerRadius = 16
+        rightTint.layer?.masksToBounds = true
+        pane.addSubview(rightTint)
+        NSLayoutConstraint.activate([
+            rightTint.topAnchor.constraint(equalTo: pane.topAnchor),
+            rightTint.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            rightTint.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            rightTint.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
+        ])
+        // 描边
+        let rightRim = GlassRimView()
+        rightRim.cornerRadius = 16
+        rightRim.translatesAutoresizingMaskIntoConstraints = false
+        pane.addSubview(rightRim)
+        NSLayoutConstraint.activate([
+            rightRim.topAnchor.constraint(equalTo: pane.topAnchor),
+            rightRim.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            rightRim.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            rightRim.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
+        ])
         // pane 自身也裁圆，否则子视图（滚动区）会把圆角盖掉
         pane.wantsLayer = true
         pane.layer?.cornerRadius = 16
