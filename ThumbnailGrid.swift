@@ -387,8 +387,12 @@ final class ThumbnailGrid: NSView {
     /// 有几像素偏差，导致 FlowLayout 时而塞得下 5 列、时而只剩 4 列 ——
     /// 也就是用户看到的「4 列 5 列来回跳」。
     var availableGridWidth: CGFloat {
-        let w = collection.bounds.width
-        return w > 0 ? w : scroll.contentView.bounds.width
+        // 以 scroll 的可视宽度为准：它由 Auto Layout 驱动，布局完成即有正确值；
+        // collection.frame 是手动设置的，启动早期可能是初值（很小），
+        // 拿它算列宽会得出「一行只放得下 3 个」的结果 —— 这正是
+        // 「启动三列、缩放一下变五列」的根因。
+        let w = scroll.contentView.bounds.width
+        return w > 0 ? w : bounds.width
     }
 
     func applyCardSize(availableWidth: CGFloat, columns: Int) {
@@ -565,10 +569,14 @@ final class ThumbnailGrid: NSView {
         }
     }
 
-    /// 布局变化（窗口缩放）后重新计算高度
+    /// 网格几何变化后回调（供外部重算列宽）
+    var onGeometryChange: (() -> Void)?
+
+    /// 布局变化（窗口缩放 / 启动首次布局）后重新计算高度并通知外部
     override func layout() {
         super.layout()
         updateCollectionHeight()
+        onGeometryChange?()
     }
 
     private func updatePager() {

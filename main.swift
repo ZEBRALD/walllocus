@@ -382,18 +382,6 @@ enum Settings {
     }
 
     /// 每页显示多少个素材。行列会按窗口比例自动排布，这个值只决定「一页放几个」。
-    /// 可选档位见 L10n 的 setting.pageSize.* 文案。
-    static var pageSize: Int {
-        get {
-            let v = d.integer(forKey: "pageSize")
-            // 没设置过或越界时回到默认 25
-            return (10...100).contains(v) ? v : 25
-        }
-        set { d.set(newValue, forKey: "pageSize") }
-    }
-
-    /// 备选档位
-    static let pageSizeOptions = [15, 20, 25, 30, 40, 50]
 
     /// 壁纸文件存放目录。首次使用时默认 ~/Pictures/WallLocus，
     /// 用户也可以改成任意目录。新添加的素材会被复制到这里集中管理。
@@ -1440,6 +1428,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let toolbar = NSStackView()
         toolbar.translatesAutoresizingMaskIntoConstraints = false
 
+        // 网格尺寸变化后重算列宽（启动时布局一完成就能得到 5 列，
+        // 不必等用户缩放窗口）
+        thumbnailGrid.onGeometryChange = { [weak self] in
+            self?.relayoutGridColumns()
+        }
+
         thumbnailGrid.onSelect = { [weak self] path in self?.selectFromGrid(path: path) }
         thumbnailGrid.onContextMenu = { [weak self] path, view in
             self?.makeCardMenu(path: path, view: view)
@@ -1976,7 +1970,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 先定网格形状，再调卡片尺寸 —— 顺序反了会被 setGrid 重建的 layout
         // 把 itemSize 覆盖回旧值（实测表现为「算的是 5 列，显示的是 4 列」）。
-        let perPage = min(Settings.pageSize, max(1, filteredLibrary().count))
+        let perPage = max(1, filteredLibrary().count)
         let rows = max(1, Int(ceil(Double(perPage) / Double(cols))))
 
         if cols != gridColumns || rows != gridRows {
@@ -2041,37 +2035,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let library = NSMenuItem(title: L10n.t("setting.library"), action: nil, keyEquivalent: "")
         let librarySub = NSMenu()
 
-        let perPage = NSMenuItem(title: L10n.t("setting.pageSize"), action: nil, keyEquivalent: "")
-        let perPageSub = NSMenu()
-        var matchedPreset = false
-        for n in Settings.pageSizeOptions {
-            let item = NSMenuItem(title: L10n.t("setting.pageSize.value", n),
-                                  action: #selector(changePageSize(_:)),
-                                  keyEquivalent: "")
-            item.target = self
-            item.representedObject = n
-            let on = (Settings.pageSize == n)
-            item.state = on ? .on : .off
-            if on { matchedPreset = true }
-            perPageSub.addItem(item)
-        }
-
-        // 档位之外再给个自由输入。当前值不在预设档位里时，
-        // 「自定义…」右侧直接显示实际数字，免得看不出现在是几个。
-        perPageSub.addItem(.separator())
-        let customTitle = matchedPreset
-            ? L10n.t("setting.pageSize.custom")
-            : L10n.t("setting.pageSize.customValue", Settings.pageSize)
-        let custom = NSMenuItem(title: customTitle,
-                                action: #selector(promptPageSize),
-                                keyEquivalent: "")
-        custom.target = self
-        custom.state = matchedPreset ? .off : .on
-        perPageSub.addItem(custom)
-
-        perPage.submenu = perPageSub
-        librarySub.addItem(perPage)
-
         librarySub.addItem(.separator())
         let cur = NSMenuItem(title: L10n.t("setting.currentFolder", Settings.wallpaperFolder.path),
                              action: nil, keyEquivalent: "")
@@ -2128,41 +2091,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 弹出输入框让用户自填每页数量。
-    @objc private func promptPageSize() {
-        let alert = NSAlert()
-        alert.messageText = L10n.t("setting.pageSize.promptTitle")
-        alert.informativeText = L10n.t("setting.pageSize.promptBody")
-        alert.addButton(withTitle: L10n.t("common.save"))
-        alert.addButton(withTitle: L10n.t("common.cancel"))
-
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
-        field.stringValue = String(Settings.pageSize)
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        guard let n = Int(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            flashStatus(L10n.t("setting.pageSize.invalid"))
-            return
-        }
-        // 夹到合理范围，避免填 0 或几万导致布局异常
-        let clamped = max(1, min(200, n))
-        if clamped != n {
-            flashStatus(L10n.t("setting.pageSize.clamped", clamped))
-        }
-        Settings.pageSize = clamped
-        applyPageSizeChange()
-    }
-
-    /// 改完每页数量后立即重排并刷新，让改动能当场看到。
-    private func applyPageSizeChange() {
-        gridColumns = -1          // 强制重算
-        relayoutGridColumns()
-        reloadLibrary()
-    }
-
-    /// 切换界面语言。语言影响所有文案，所以提示用户重启一次最干净，
-    /// 但这里先尝试就地刷新（重建窗口与菜单），能不重启就不重启。
     @objc private func changeLanguage(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String,
               let lang = L10n.Language(rawValue: raw) else { return }
@@ -2193,12 +2121,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         scanWallpaperFolder()
         reloadLibrary()
         flashStatus(L10n.t("folder.changed"))
-    }
-
-    @objc private func changePageSize(_ sender: NSMenuItem) {
-        guard let n = sender.representedObject as? Int else { return }
-        Settings.pageSize = n
-        applyPageSizeChange()
     }
 
     @objc private func revealAppInFinder() {
