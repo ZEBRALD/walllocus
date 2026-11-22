@@ -1081,6 +1081,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 搜索框宽度约束（跟随右栏）
     /// 搜索框左缘约束（绑定右栏左缘）
     private var searchFieldLeftConstraint: NSLayoutConstraint?
+    /// 搜索框占位约束（重绑后必须取消，否则两条 leading 冲突）
+    private var searchPlaceholderConstraint: NSLayoutConstraint!
     /// 右栏容器（供搜索框绑定左缘）
     private weak var detailPane: NSView?
     /// 顶栏标题与顶栏容器（供重启时重绑）
@@ -1089,7 +1091,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 右栏宽度约束
     private var rightWidthConstraint: NSLayoutConstraint!
     /// 中栏宽度约束（随左右栏变化重算）
-    private var middleWidthConstraint: NSLayoutConstraint!
+    private var middleWidthConstraint: NSLayoutConstraint?
     /// 右栏元素宽度约束（随栏宽更新）
     private var detailWidthConstraints: [NSLayoutConstraint] = []
     /// 当前栏宽（拖拽时改这两个值）
@@ -1331,8 +1333,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         sidebarWidthConstraint = sidebar.widthAnchor.constraint(equalToConstant: sidebarWidth)
         rightWidthConstraint = right.widthAnchor.constraint(equalToConstant: rightWidth)
         // 中栏宽度 = 窗口宽 - 左栏 - 右栏 - 间距（12+8+8+12）
-        middleWidthConstraint = middle.widthAnchor.constraint(
-            equalToConstant: max(200, 1100 - sidebarWidth - rightWidth - 40))
 
         // ── 栏间拖拽条 ──
         let leftHandle = ResizeHandle()
@@ -1413,7 +1413,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             middle.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             // 中栏宽度 = 窗口宽 - 左栏 - 右栏 - 所有间距
             // 用精确约束而非 >=，否则拖宽右栏时总宽溢出会把窗口撑大
-            middleWidthConstraint,
 
             // ── 右栏：独立圆角面板 ──
             // 右栏在顶栏浮层下方开始，留出可见的缝
@@ -1435,7 +1434,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             right.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
         ])
 
-        w.contentView = container
+        // 用空 wrapper 当 contentView：
+        // 直接把 container 当 contentView 时，AppKit 会按内容固有宽度
+        // 反算窗口最大宽度，导致只能改高度、改不了宽度。
+        let host = NSView()
+        w.contentView = host
+        container.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(container)
+        NSLayoutConstraint.activate([
+            container.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+            container.topAnchor.constraint(equalTo: host.topAnchor),
+            container.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+        ])
 
         w.delegate = self
         window = w
@@ -1626,6 +1637,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         searchField.action = #selector(searchChanged)
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
+        searchPlaceholderConstraint = searchField.leadingAnchor.constraint(
+            equalTo: bar.leadingAnchor, constant: 700)
         // 添加壁纸（加号）：与齿轮同款样式
         addFilesButton.image = NSImage(systemSymbolName: "plus",
                                        accessibilityDescription: L10n.t("win.addFiles"))
@@ -1676,7 +1689,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             searchField.trailingAnchor.constraint(equalTo: addFilesButton.leadingAnchor, constant: -10),
             searchField.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 47),
             // 搜索框左缘贴右栏左缘由 rebindTitleToSidebar() 在视图就位后绑定
-            searchField.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 700),
+            searchPlaceholderConstraint,
             // 与齿轮同高，视觉上三者（logo/搜索/齿轮）在同一条水平线上
             searchField.heightAnchor.constraint(equalToConstant: 28),
         ])
@@ -1823,7 +1836,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 改成 0 后滚动条贴到与中栏相同的位置，文字与滚动条之间的呼吸由内容自身留白提供。
         // 顶部留出顶栏高度（76），因为顶栏现在是浮层
         // 元素上移：顶栏已无背景，不再需要较大的顶部内边距
-        root.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 0)
+        // 四边都留 16：right 为 0 时预览图等元素会直接贴到右边缘
+        root.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
         // 不在这里定 translatesAutoresizingMaskIntoConstraints：
         // 右栏的 root 由 syncDetailDocSize 用 frame 摆放，
         // 在 doc.addSubview 处统一设为 true。
@@ -1835,16 +1849,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         paneTitle.lineBreakMode = .byTruncatingMiddle
         paneTitle.translatesAutoresizingMaskIntoConstraints = false
         let fileTitleW = paneTitle.widthAnchor.constraint(equalToConstant: 270)
+        fileTitleW.priority = .init(700)
         detailWidthConstraints.append(fileTitleW)
         fileTitleW.isActive = true
         root.addArrangedSubview(paneTitle)
 
         // 当前素材的大图预览：给"选中了什么"一个明确的视觉锚点
         previewPane.translatesAutoresizingMaskIntoConstraints = false
+        previewPane.heightAnchor.constraint(equalToConstant: 150).isActive = true
+        // 宽度由 syncDetailDocSize 写入（跟随栏宽减左右内边距）
         let previewPaneW = previewPane.widthAnchor.constraint(equalToConstant: 270)
+        previewPaneW.priority = .init(999)
         detailWidthConstraints.append(previewPaneW)
         previewPaneW.isActive = true
-        previewPane.heightAnchor.constraint(equalToConstant: 150).isActive = true
+        // 预览图必须严格等于内容宽度，否则窄栏时会顶出面板
+        previewPane.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        previewPane.setContentCompressionResistancePriority(.init(250), for: .horizontal)
         root.addArrangedSubview(previewPane)
 
         root.addArrangedSubview(separator(width: 270))
@@ -1865,6 +1885,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         fileInfoLabel.preferredMaxLayoutWidth = 270
         fileInfoLabel.translatesAutoresizingMaskIntoConstraints = false
         let fileInfoLabelW = fileInfoLabel.widthAnchor.constraint(equalToConstant: 270)
+        fileInfoLabelW.priority = .init(700)
         detailWidthConstraints.append(fileInfoLabelW)
         fileInfoLabelW.isActive = true
         root.addArrangedSubview(fileInfoLabel)
@@ -1918,6 +1939,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         loadPresetButton.action = #selector(loadSelectedPresetFromButton)
         loadPresetButton.translatesAutoresizingMaskIntoConstraints = false
         let loadPresetButtonW = loadPresetButton.widthAnchor.constraint(equalToConstant: 270)
+        loadPresetButtonW.priority = .init(700)
         detailWidthConstraints.append(loadPresetButtonW)
         loadPresetButtonW.isActive = true
         loadPresetButton.isHidden = true
@@ -1929,6 +1951,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         assignButton.action = #selector(assignToTarget)
         assignButton.translatesAutoresizingMaskIntoConstraints = false
         let assignButtonW = assignButton.widthAnchor.constraint(equalToConstant: 270)
+        assignButtonW.priority = .init(700)
         detailWidthConstraints.append(assignButtonW)
         assignButtonW.isActive = true
         root.addArrangedSubview(assignButton)
@@ -1939,6 +1962,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         removeButton.action = #selector(removeFromLibrary)
         removeButton.translatesAutoresizingMaskIntoConstraints = false
         let removeButtonW = removeButton.widthAnchor.constraint(equalToConstant: 270)
+        removeButtonW.priority = .init(700)
         detailWidthConstraints.append(removeButtonW)
         removeButtonW.isActive = true
         root.addArrangedSubview(removeButton)
@@ -1949,6 +1973,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         stopButton.bezelStyle = .rounded
         stopButton.translatesAutoresizingMaskIntoConstraints = false
         let stopButtonW = stopButton.widthAnchor.constraint(equalToConstant: 270)
+        stopButtonW.priority = .init(700)
         detailWidthConstraints.append(stopButtonW)
         stopButtonW.isActive = true
         root.addArrangedSubview(stopButton)
@@ -1958,6 +1983,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         pauseButton.action = #selector(togglePause)
         pauseButton.translatesAutoresizingMaskIntoConstraints = false
         let pauseButtonW = pauseButton.widthAnchor.constraint(equalToConstant: 270)
+        pauseButtonW.priority = .init(700)
         detailWidthConstraints.append(pauseButtonW)
         pauseButtonW.isActive = true
         root.addArrangedSubview(pauseButton)
@@ -1968,6 +1994,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         clearCurrentButton.action = #selector(clearCurrentDisplayWallpaper)
         clearCurrentButton.translatesAutoresizingMaskIntoConstraints = false
         let clearCurrentButtonW = clearCurrentButton.widthAnchor.constraint(equalToConstant: 270)
+        clearCurrentButtonW.priority = .init(700)
         detailWidthConstraints.append(clearCurrentButtonW)
         clearCurrentButtonW.isActive = true
         root.addArrangedSubview(clearCurrentButton)
@@ -1978,6 +2005,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         clearAllButton.action = #selector(clearAllDisplaysWallpaper)
         clearAllButton.translatesAutoresizingMaskIntoConstraints = false
         let clearAllButtonW = clearAllButton.widthAnchor.constraint(equalToConstant: 270)
+        clearAllButtonW.priority = .init(700)
         detailWidthConstraints.append(clearAllButtonW)
         clearAllButtonW.isActive = true
         root.addArrangedSubview(clearAllButton)
@@ -1989,6 +2017,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         warningLabel.maximumNumberOfLines = 2
         warningLabel.translatesAutoresizingMaskIntoConstraints = false
         let warnW = warningLabel.widthAnchor.constraint(equalToConstant: 270)
+        warnW.priority = .init(700)
         detailWidthConstraints.append(warnW)
         warnW.isActive = true
         fixButton.bezelStyle = .rounded
@@ -2054,6 +2083,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         l.textColor = .secondaryLabelColor
         control.translatesAutoresizingMaskIntoConstraints = false
         let ctrlW = control.widthAnchor.constraint(equalToConstant: 270)
+        ctrlW.priority = .init(700)
         detailWidthConstraints.append(ctrlW)
         ctrlW.isActive = true
         let s = NSStackView(views: [l, control])
@@ -2092,6 +2122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         row.alignment = .centerY
         row.translatesAutoresizingMaskIntoConstraints = false
         let rowW = row.widthAnchor.constraint(equalToConstant: 270)
+        rowW.priority = .init(700)
         detailWidthConstraints.append(rowW)
         rowW.isActive = true
 
@@ -2102,6 +2133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 外层容器也要跟随宽度，否则 row 拉伸时外层不动
         s.translatesAutoresizingMaskIntoConstraints = false
         let sW = s.widthAnchor.constraint(equalToConstant: 270)
+        sW.priority = .init(700)
         detailWidthConstraints.append(sW)
         sW.isActive = true
         return s
@@ -2848,8 +2880,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let w = max(scroll.contentView.bounds.width, paneWidth)
         guard w > 120 else { return }   // 明显异常时不动，等下一轮
 
-        // 子元素宽度跟随栏宽（左右各 16 内边距）
-        let contentW = max(200, w - 32)
+        // 子元素宽度跟随栏宽（左右各 16 内边距）。
+        // 下限不能设成 200：右栏窄到 220 时 220-32=188 会被抬到 200，
+        // 元素反而比可用宽度还宽，右边就顶出面板了。
+        let contentW = max(80, w - 32)
         if abs((detailWidthConstraints.first?.constant ?? 0) - contentW) > 0.5 {
             for c in detailWidthConstraints { c.constant = contentW }
         }
@@ -4122,11 +4156,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 重算中栏宽度：拖左右栏时保持三栏之和 = 窗口宽，避免溢出撑大窗口。
-    private func updateMiddleWidth() {
-        guard let w = window else { return }
-        let avail = w.frame.width - sidebarWidth - rightWidth - 40
-        middleWidthConstraint.constant = max(200, avail)
-    }
+    /// 中栏宽度由左右栏位置自然决定，不再需要显式计算。
+    private func updateMiddleWidth() {}
 
     /// 把顶栏标题绑到左栏右缘（间距 8）。
     /// 必须在 sidebar 已加入视图层级之后调用，否则跨视图约束会崩。
@@ -4140,6 +4171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 搜索框左缘贴右栏左缘（+12 与右栏面板内缩对齐），
         // 但现在右侧多了加号按钮，搜索框要往左缩一个按钮位。
         if let pane = detailPane {
+            searchPlaceholderConstraint?.isActive = false
             searchFieldLeftConstraint?.isActive = false
             // 左缘贴右栏左缘（+12 与面板内缩对齐）。
             // 右侧的搜索框 trailing 已改由加号按钮决定，宽度会自动收窄，

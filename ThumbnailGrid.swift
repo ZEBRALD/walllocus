@@ -297,6 +297,8 @@ final class ThumbnailGrid: NSView {
     var onSelect: ((String) -> Void)?
     /// 用户右键卡片（用于重命名菜单）
     var onContextMenu: ((String, NSView) -> NSMenu?)?
+    /// 用户右键空白处（库级操作：刷新 / 添加 / 在访达显示）
+    var onBlankContextMenu: ((NSView) -> NSMenu?)?
     /// 用户双击卡片（进入重命名）
     var onDoubleClick: ((String) -> Void)?
 
@@ -312,6 +314,23 @@ final class ThumbnailGrid: NSView {
     private var pageItems: [LibraryItem] = []
 
     private let scroll = NSScrollView()
+
+    /// 右键：落在卡片上由 CardView 自己处理；落到空白处时弹出库级菜单。
+    ///
+    /// NSCollectionView 自己会吞掉空白区的右键，所以要在网格容器这一层接。
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let pt = convert(event.locationInWindow, from: nil)
+        // 命中卡片就让卡片处理，避免两边都弹菜单
+        if let hit = hitTest(pt), hit !== self {
+            var v: NSView? = hit
+            while let cur = v {
+                if cur is CardView { return nil }
+                if cur === self { break }
+                v = cur.superview
+            }
+        }
+        return onBlankContextMenu?(self)
+    }
     private let collection = NSCollectionView()
     private let pager = NSStackView()
     private let prevButton = NSButton(title: "‹", target: nil, action: nil)
