@@ -42,51 +42,68 @@ enum MediaKind: String, Codable {
 /// 上边偏亮、下边偏暗，模拟光线自上方入射时的边缘折射，
 /// 这是 macOS liquid glass 面板能在深色底上「浮起来」的关键。
 final class GlassRimView: NSView {
-    /// 与面板一致的圆角（Vorssaint 用 16pt，macOS 15 的系统面板也是这个量级）
+    /// 与面板一致的圆角
     var cornerRadius: CGFloat = 16
+
+    /// 环境色调（由外部注入，随壁纸/周围内容更新）。
+    /// 描边用「环境色的亮版本」，所以边框会跟着背景冷暖一起变。
+    var ambientColor: NSColor = .white {
+        didSet { needsDisplay = true }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
-        // 透明、不拦截点击 —— 它只是一层装饰
-        wantsLayer = false
     }
     required init?(coder: NSCoder) { fatalError() }
 
     override var isOpaque: Bool { false }
 
     override func draw(_ dirtyRect: NSRect) {
-        // 照 Vorssaint 的做法：等宽 1pt 描边，四边亮度一致。
-        //
-        // 之前用「挖洞 + 渐变填充环」的写法不均匀 —— 顶部亮、底部几乎看不见，
-        // 看起来就像只有某一边有边。Vorssaint 的二进制里是
-        // setBorderWidth: / setBorderColor:，也就是最朴素的等宽描边。
         let r = bounds.insetBy(dx: 0.5, dy: 0.5)
         let path = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
         path.lineWidth = 1
 
-        // 必须比面板明显亮：面板本身约 55/255，12% 白只到 60，差 5 看不出。
-        // 实测 Vorssaint 的边比内部亮约 30，取 0.20 白更接近。
-        NSColor(white: 1.0, alpha: 0.20).setStroke()
+        // 描边颜色 = 环境色的高亮版，而不是固定白。
+        // Vorssaint 的边框会随内容变色，来源就是把材质的采样结果染进描边里。
+        // 这里用环境色的 HSV 提升亮度 + 少量白，保留色相。
+        let rim = Self.highlight(from: ambientColor)
+        rim.setStroke()
         path.stroke()
 
-        // 额外的「顶部高光」：只在上方 ~35% 区域叠一层更亮的渐变，
-        // 让面板看起来有光从上面打下。这是与等宽边框分开的一层，
-        // 所以不会破坏四边的均匀性。
+        // 顶部高光：用同样色调，更淡
         NSGraphicsContext.saveGraphicsState()
-        let highlight = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
-        highlight.addClip()
-        let grad = NSGradient(colors: [
-            NSColor(white: 1.0, alpha: 0.16),   // 顶部
-            NSColor(white: 1.0, alpha: 0.0),    // 到 35% 处淡出
-        ])
-        // 只画上方一小条，模拟顶部边缘的反射
-        let topBand = NSRect(x: 0, y: bounds.height - bounds.height * 0.35,
-                             width: bounds.width, height: bounds.height * 0.35)
-        grad?.draw(in: topBand, angle: -90)
+        path.addClip()
+        var top = Self.highlight(from: ambientColor)
+        top = top.withAlphaComponent(0.5)
+        let grad = NSGradient(colors: [top, top.withAlphaComponent(0)])
+        grad?.draw(in: NSRect(x: 0, y: bounds.height * 0.65,
+                              width: bounds.width, height: bounds.height * 0.35),
+                   angle: -90)
         NSGraphicsContext.restoreGraphicsState()
     }
+
+    /// 由环境色推导描边色：保留色相，只提亮。
+    ///
+    /// 关键：不要和环境色「混白」—— 那样任何颜色都会被推到接近白，
+    /// 色差被压扁成一模一样的灰。正确做法是把 HSV 的明度拉高、
+    /// 饱和度略降，色相完全保留，这样红色壁纸的边就是偏红的暖白。
+    static func highlight(from c: NSColor) -> NSColor {
+        guard let rgb = c.usingColorSpace(.sRGB) else {
+            return NSColor(white: 1.0, alpha: 0.22)
+        }
+        var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0, a: CGFloat = 0
+        rgb.getHue(&h, saturation: &s, brightness: &v, alpha: &a)
+
+        // 明度拉到 0.62~0.95（保证边框够亮），饱和度保留 45%（保住色相倾向）
+        let newV = min(0.95, max(0.62, 0.55 + v * 0.45))
+        let newS = s * 0.45
+
+        let out = NSColor(hue: h, saturation: newS, brightness: newV, alpha: 0.34)
+        return out.usingColorSpace(.sRGB) ?? NSColor(white: 0.9, alpha: 0.34)
+    }
 }
+
 
 
 /// 顶部渐变遮罩：上层底色实、下层透明，让模糊层自然淡出。
@@ -97,6 +114,90 @@ final class FadeOverlay: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let grad = NSGradient(starting: topColor, ending: bottomColor)
         grad?.draw(in: bounds, angle: -90)
+    }
+}
+
+/// 采样面板背后的环境色，供玻璃描边染色。
+///
+/// 做法：用 CGWindowListCreateImage 抓窗口背后那一块屏幕（不含本窗口），
+/// 取平均色。频率很低（1.5 秒一次）且区域很小，开销可以忽略。
+final class AmbientColorSampler {
+    static let shared = AmbientColorSampler()
+
+    private var timer: Timer?
+    private(set) var color: NSColor = .white
+    var onChange: ((NSColor) -> Void)?
+
+    /// 采样点（屏幕坐标）：面板附近的几个位置取平均
+    private var samplePoints: [CGPoint] = []
+
+    /// 由外部提供「当前壁纸路径」，采样器据此取平均色
+    var wallpaperPathProvider: (() -> String?)?
+
+    func start(points: [CGPoint] = []) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            self?.sample()
+        }
+        sample()
+    }
+
+    private func currentWallpaperPath() -> String? {
+        if let p = wallpaperPathProvider?(), !p.isEmpty { return p }
+        // 兜底：直接从持久化状态读，避免「闭包还没接上/state 还没加载」的时序问题
+        guard let d = UserDefaults.standard.dictionary(forKey: "app.walllocus.state") as? [String: Any],
+              let json = d["walllocus.state.v1"] as? Data,
+              let obj = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+              let assign = obj["assignment"] as? [String: String] else { return nil }
+        return assign.values.first
+    }
+
+    private func sample() {
+        // 从「当前正在显示的壁纸」取平均色。
+        //
+        // 比截屏可靠得多：截屏会被本窗口自身挡住（面板就盖在采样点上），
+        // desktopImageURL 又未必指向真实的显示内容。
+        // 我们自己就知道当前铺的是哪张图，直接读它即可。
+        guard let path = currentWallpaperPath() else {
+            return
+        }
+        let url = URL(fileURLWithPath: path)
+
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return
+        }
+        // 缩略图方式解码：又快又省内存
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 32,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else {
+            return
+        }
+
+        let w = 24, h = 24
+        var data = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &data, width: w, height: h,
+                                  bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        ctx.interpolationQuality = .medium
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        var r = 0.0, g = 0.0, b = 0.0
+        for i in 0..<(w * h) {
+            r += Double(data[i * 4])
+            g += Double(data[i * 4 + 1])
+            b += Double(data[i * 4 + 2])
+        }
+        let n = Double(w * h)
+        let c = NSColor(srgbRed: CGFloat(r / n / 255),
+                        green: CGFloat(g / n / 255),
+                        blue: CGFloat(b / n / 255),
+                        alpha: 1)
+        color = c
+        onChange?(c)
     }
 }
 
@@ -963,6 +1064,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         ) { [weak self] _ in
             self?.reloadScreens()
             WallpaperManager.shared.applyAll()
+            // 屏参变了，壁纸可能也换屏了 —— 触发一次重采
+            AmbientColorSampler.shared.start(points: [])
         }
     }
 
@@ -1005,10 +1108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 整个面板都是拖放目标
         let container = DropZoneView()
-        // 窗口基础底色：照片 App 是一整块深色底 + 浮起的侧栏卡片。
-        // 没有这一层时，顶栏区和面板之间的间隙会直接透出黑色。
-        // 注意用 withinWindow 的玻璃做不到这一点（那会挡住壁纸），
-        // 这里要的是不透明纯色，玻璃面板再压在上面做 liquid glass 效果。
+        // 窗口基础底色
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145,
                                                    alpha: 1.0).cgColor
@@ -1384,8 +1484,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let pane = NSView()
         pane.translatesAutoresizingMaskIntoConstraints = false
         // 中栏：最透的一层，让壁纸的冷暖色透上来
-        // 中栏不铺任何玻璃：图库直接坐在窗口的深色底上（照片 App 就是这样）。
-        // 套一层毛玻璃会让缩略图像浮在一块磨砂板上，与「直接浏览图片」的观感不符。
+        // 中栏不铺底色：图库直接坐在窗口深色底上
         pane.wantsLayer = true
 
         addButton.title = L10n.t("win.addFiles")
@@ -1399,6 +1498,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 按钮移到底部区域（见 buildDetailPane 末尾）。
         let toolbar = NSStackView()
         toolbar.translatesAutoresizingMaskIntoConstraints = false
+
+        // 启动环境色采样：读当前壁纸的主色，作为侧栏描边的染色源。
+        // 采样频率 1.5s，解码缩略图 32px，开销可忽略。
+        AmbientColorSampler.shared.wallpaperPathProvider = { [weak self] in
+            guard let self else { return nil }
+            // 取当前任意一块屏正在显示的壁纸 —— 它们的色调就是窗口周围的环境
+            return self.state.assignment.values.first
+        }
+        AmbientColorSampler.shared.start(points: [])
 
         // 网格尺寸变化后重算列宽（启动时布局一完成就能得到 5 列，
         // 不必等用户缩放窗口）
@@ -1460,9 +1568,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         pane.translatesAutoresizingMaskIntoConstraints = false
         // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
         // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
-        // 与侧栏一致：窗口不透明，behindWindow 采到的就是软件自己的底色
-        _ = addGlass(to: pane, material: .sidebar, blending: .withinWindow,
-                     tint: 0.42, cornerRadius: 16)
+        // 与侧栏一致：窗口不透明 → 桌面透不进来，
+        // 而材质能拿到环境光做自适应（Vorssaint 那种随周围变色）。
+        _ = addGlass(to: pane, material: .sidebar, blending: .behindWindow,
+                     tint: 0.06, cornerRadius: 16)
         // pane 自身也裁圆，否则子视图（滚动区）会把圆角盖掉
         pane.wantsLayer = true
         pane.layer?.cornerRadius = 16
