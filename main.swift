@@ -106,6 +106,50 @@ final class GlassRimView: NSView {
 
 
 
+/// 真正的渐变模糊层：用 CABackdropLayer（系统内部做背景模糊的类）
+/// 替代 NSVisualEffectView —— 后者的 layer 由系统托管、不接受 mask，
+/// 而 backdrop layer 可以被 CAGradientLayer 遮罩，从而让模糊强度线性衰减。
+/// 这是 macOS 照片 App 顶栏那种「上实下虚」的实现方式。
+final class BackdropView: NSView {
+    private var backdrop: CALayer?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        translatesAutoresizingMaskIntoConstraints = false
+        setupBackdrop()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setupBackdrop() {
+        guard let cls = NSClassFromString("CABackdropLayer") as? CALayer.Type else { return }
+        let layer = cls.init()
+        layer.setValue(true, forKey: "windowServerAware")
+        layer.setValue(0.85, forKey: "scale")
+        addSubview(NSView())  // 占位，保证 layer 层级
+        self.wantsLayer = true
+        self.layer?.addSublayer(layer)
+        self.backdrop = layer
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        backdrop?.frame = bounds
+        CATransaction.commit()
+    }
+
+    /// 设置渐变遮罩：上方 alpha 1（完全模糊）→ 下方 alpha 0（不模糊）
+    func applyFadeMask(ratio: CGFloat) {
+        guard let backdrop else { return }
+        let mask = CAGradientLayer()
+        mask.frame = bounds
+        mask.colors = [NSColor.black.cgColor, NSColor.black.cgColor, NSColor.clear.cgColor]
+        mask.locations = [0.0, NSNumber(value: Double(1.0 - ratio)), 1.0]
+        backdrop.mask = mask
+    }
+}
 /// 顶部渐变遮罩：上层底色实、下层透明，让模糊层自然淡出。
 final class FadeOverlay: NSView {
     var topColor: NSColor = .black
@@ -1417,14 +1461,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 必须用 CAGradientLayer 当 mask，让下层图片滚过来时逐渐淡出。
         bar.wantsLayer = true
 
-        let topBlur = NSVisualEffectView()
-        topBlur.material = .headerView
-        // 必须 withinWindow：顶栏要模糊的是「从下面滚上来的图库内容」，
-        // 用 behindWindow 采的是窗口背后的桌面，图片滚过来时一点都不会被糊。
-        topBlur.blendingMode = .withinWindow
-        topBlur.state = .active
-        topBlur.translatesAutoresizingMaskIntoConstraints = false
-        topBlur.wantsLayer = true
+        // BackdropView：真正的渐变模糊（CABackdropLayer + 渐变 mask）
+        let topBlur = BackdropView()
 
         bar.addSubview(topBlur, positioned: .below, relativeTo: nil)
         NSLayoutConstraint.activate([
@@ -1442,9 +1480,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 实际是靠「模糊 + 上方 scrim 压实 + 下方淡出」组合出来的，
         // 滚动时图片进入上半部会被 scrim 压住，越往下越清晰。
         let scrim = FadeOverlay()
-        scrim.topColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.88)
-        scrim.midColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145,
-                                 alpha: 0.45)
+        // 模糊本身已经做了淡出，scrim 只负责一点点压暗保证文字可读
+        scrim.topColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.35)
+        scrim.midColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.12)
         scrim.bottomColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.0)
         scrim.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(scrim)
@@ -1455,6 +1493,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             scrim.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
         self.topScrim = scrim
+        // 应用真正的渐变模糊：上方 45% 满强度，之后线性衰减到 0
+        topBlur.applyFadeMask(ratio: 0.45)
 
 
         searchField.placeholderString = L10n.t("top.searchPlaceholder")
