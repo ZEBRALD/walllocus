@@ -102,12 +102,14 @@ final class SidebarNavigator: NSView {
         // 左导航：三块区域里最「实」的一层，作为视觉基座。
         // 用 sidebar 材质（系统侧栏观感）+ 略重的 tint 拉开层次。
         let blur = NSVisualEffectView()
+        // 左栏：最实的一层（导航要稳定，不随壁纸晃太厉害）
         blur.material = .sidebar
         // 用 behindWindow：窗口本身不透明（isOpaque + 深色背景），
         // 所以桌面不会透进来；而材质能拿到窗口背后的环境光做自适应，
         // 这正 Vorssaint 那种「随周围变色」的来源。
         // （之前用 withinWindow 且垫了纯色底，等于采一块死色 —— 永远不会变。）
-        blur.blendingMode = .behindWindow
+        // 采样本窗口内的底玻璃（含壁纸色），而不是直接采桌面
+        blur.blendingMode = .withinWindow
         blur.state = .active
         blur.translatesAutoresizingMaskIntoConstraints = false
         // 玻璃层也要裁圆，否则它会在父视图圆角外露出直角
@@ -145,7 +147,8 @@ final class SidebarNavigator: NSView {
         // 加一层更重的黑色 tint 把它拉回到与底色同色系
         // 只留极淡一层压暗做层次，不再用 42% 黑 —— 那会把材质的自适应压死，
         // 整栏变成一块死灰。（Vorssaint 的 SwiftUI Material 本身不带 tint。）
-        tint.layer?.backgroundColor = NSColor(white: 0, alpha: 0.06).cgColor
+        // 层次：左栏最实（导航基座），tint 最重
+        tint.layer?.backgroundColor = NSColor(white: 0, alpha: 0.22).cgColor
         tint.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(tint)
         NSLayoutConstraint.activate([

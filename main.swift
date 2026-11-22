@@ -963,6 +963,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let paneTitle = NSTextField(labelWithString: "")
     /// 顶栏渐变模糊的遮罩（需要在 resize 时同步 frame）
     private var topFadeLayer: CAGradientLayer?
+    private var baseGlass: NSVisualEffectView?
+    private var baseTint: NSView?
     private var topTitle: NSTextField?
     private var topSubtitle: NSTextField?
     private var topFadeHost: NSView?
@@ -1099,8 +1101,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // （早先为了「透出桌面」设成 isOpaque=false + clear，现在设计改了：
         //   要求毛玻璃只透软件自己的 UI 底色。）
         w.titlebarAppearsTransparent = true
-        w.isOpaque = true
-        w.backgroundColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 1.0)
+        // 窗口透明：这是 liquid glass 能「随壁纸变色」的前提。
+        // 每一层都铺玻璃，所以不会露出桌面 —— 见 container 的底玻璃。
+        w.isOpaque = false
+        w.backgroundColor = .clear
         // 内容延伸到标题栏下方，否则顶部会留一条与内容割裂的横带
         w.styleMask.insert(.fullSizeContentView)
         // 固定深色外观：毛玻璃在浅色外观下会发白，和壁纸缩略图深底不搭
@@ -1108,10 +1112,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 整个面板都是拖放目标
         let container = DropZoneView()
-        // 窗口基础底色
+        // 底层也用 liquid glass：它是整个窗口的「底」，最实的一层。
+        // 窗口透明后，这层玻璃负责模糊桌面壁纸，形成整窗的环境色基底。
         container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145,
-                                                   alpha: 1.0).cgColor
+        let baseBlur = NSVisualEffectView()
+        baseBlur.material = .underWindowBackground
+        baseBlur.blendingMode = .behindWindow
+        baseBlur.state = .active
+        baseBlur.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(baseBlur, positioned: .below, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            baseBlur.topAnchor.constraint(equalTo: container.topAnchor),
+            baseBlur.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            baseBlur.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            baseBlur.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        // 底玻璃保持原样的模糊结果（不额外压暗）：
+        // 上面再垫一层会把它压成接近纯色，上层玻璃采样什么都是灰的。
+        // 明暗交给各层自己的 tint 控制。
+        self.baseGlass = baseBlur
         container.onDrop = { [weak self] paths in
             self?.handleDrop(paths)
         }
@@ -1274,22 +1293,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                           blending: NSVisualEffectView.BlendingMode = .behindWindow,
                           tint: CGFloat,
                           cornerRadius: CGFloat = 0) -> NSVisualEffectView {
-        // 玻璃下面垫一层不透明底色：无论采样模式如何都不会透出桌面。
-        // （窗口虽已 isOpaque，但 DropZoneView 覆写了 addSubview 把拖拽浮层
-        //   提到最前，合成链路上玻璃可能采到窗口之外的内容。）
-        let backing = NSView()
-        backing.wantsLayer = true
-        backing.layer?.backgroundColor = NSColor(srgbRed: 0.129, green: 0.133,
-                                                 blue: 0.145, alpha: 1.0).cgColor
-        backing.translatesAutoresizingMaskIntoConstraints = false
-        host.addSubview(backing, positioned: .below, relativeTo: nil)
-        NSLayoutConstraint.activate([
-            backing.topAnchor.constraint(equalTo: host.topAnchor),
-            backing.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-            backing.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-            backing.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-        ])
-
         let blur = NSVisualEffectView()
         blur.material = material
         blur.blendingMode = blending
@@ -1403,7 +1406,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         let topBlur = NSVisualEffectView()
         topBlur.material = .headerView
-        topBlur.blendingMode = .withinWindow
+        // 与其它层一致：采样窗口背后（桌面），让整窗环境色统一
+        topBlur.blendingMode = .behindWindow
         topBlur.state = .active
         topBlur.translatesAutoresizingMaskIntoConstraints = false
         topBlur.wantsLayer = true
@@ -1494,8 +1498,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let pane = NSView()
         pane.translatesAutoresizingMaskIntoConstraints = false
         // 中栏：最透的一层，让壁纸的冷暖色透上来
-        // 中栏不铺底色：图库直接坐在窗口深色底上
-        pane.wantsLayer = true
+        // 中栏：最透的一层 —— 让壁纸缩略图的冷暖透上来。
+        // 它不圆角（是嵌套内容区，不是栏），但依然是玻璃。
+        // withinWindow：采样本窗口内、这层之下的内容 ——
+        // 也就是底玻璃模糊过的壁纸色。behindWindow 会直接采桌面，
+        // 被 baseTint 压暗后又变回纯色。
+        _ = addGlass(to: pane, material: .underWindowBackground,
+                     blending: .withinWindow, tint: 0.04)
 
         addButton.title = L10n.t("win.addFiles")
         addButton.bezelStyle = .rounded
@@ -1578,10 +1587,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         pane.translatesAutoresizingMaskIntoConstraints = false
         // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
         // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
-        // 与侧栏一致：窗口不透明 → 桌面透不进来，
-        // 而材质能拿到环境光做自适应（Vorssaint 那种随周围变色）。
-        _ = addGlass(to: pane, material: .sidebar, blending: .behindWindow,
-                     tint: 0.06, cornerRadius: 16)
+        // 右栏：中等层——比左栏透一点，但比中栏实（承载滑块输入框）
+        _ = addGlass(to: pane, material: .sidebar, blending: .withinWindow,
+                     tint: 0.14, cornerRadius: 16)
         // pane 自身也裁圆，否则子视图（滚动区）会把圆角盖掉
         pane.wantsLayer = true
         pane.layer?.cornerRadius = 16
