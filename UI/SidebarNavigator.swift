@@ -225,7 +225,9 @@ final class SidebarNavigator: NSView {
         addSubview(subtitleLabel)
 
         NSLayoutConstraint.activate([
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
+            // 面板本身贴窗口边（红绿灯锁死在内侧），
+            // 所有视觉边距都由内容缩进承担
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             // 顶部 40 给红绿灯（系统固定位置），标题从 46 开始
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 46),
@@ -252,8 +254,10 @@ final class SidebarNavigator: NSView {
             // 面板已经从窗口顶端开始，红绿灯就嵌在它里面（照片 App 的做法）
             // 红绿灯区(40) + 标题区(56)
             scroll.topAnchor.constraint(equalTo: topAnchor, constant: 40 + 56),
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
+            // 左右各缩进 8：给选中条留出与面板边缘的呼吸
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
     }

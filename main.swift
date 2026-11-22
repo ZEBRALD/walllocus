@@ -1089,9 +1089,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 贴边后面板圆角自然把它们包住在内部的留白里（照片 App 的做法）。
             // 面板四周留边距（左/上各 12）：玻璃下面已有不透明垫底，
             // 不再依赖窗口背景，因此内缩是安全的。
-            // 顶部留 10：红绿灯占 y=8..24，面板从 10 起会把按钮上半截露在外面，
-            // 但完全贴顶又会让圆角压到按钮 —— 折中用贴顶（红绿灯完整在内），
-            // 左边距必须为 0（按钮距窗口左边只有 8pt，面板一内缩就把它挤出去）。
+            // 面板贴窗口左上角。
+            // 原因：系统把红绿灯钉死在距窗口 8pt，且每次布局都会重置 ——
+            // 无法可靠地把它们挪进面板内。面板贴边是唯一能保证
+            // 「按钮完整嵌在面板里」的方案。
+            // 视觉上的边距由面板内部内容的缩进体现（标题 22、列表 18）。
             sidebar.topAnchor.constraint(equalTo: container.topAnchor),
             sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             sidebar.widthAnchor.constraint(equalToConstant: 260),
