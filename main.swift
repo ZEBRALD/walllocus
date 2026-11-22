@@ -107,6 +107,44 @@ final class GlassRimView: NSView {
 
 
 /// 顶部渐变遮罩：上层底色实、下层透明，让模糊层自然淡出。
+/// 栏间拖拽条：鼠标移到栏间的缝隙时变成左右箭头，拖动可改变栏宽。
+final class ResizeHandle: NSView {
+    enum Side { case leftPane, rightPane }
+    var side: Side = .leftPane
+    var onDrag: ((CGFloat) -> Void)?
+
+    private var lastX: CGFloat = 0
+    private var tracking: NSTrackingArea?
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = tracking { removeTrackingArea(t) }
+        let t = NSTrackingArea(rect: bounds,
+                               options: [.activeInKeyWindow, .cursorUpdate, .mouseEnteredAndExited],
+                               owner: self, userInfo: nil)
+        addTrackingArea(t)
+        tracking = t
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.resizeLeftRight.set()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        lastX = NSEvent.mouseLocation.x
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let x = NSEvent.mouseLocation.x
+        let dx = x - lastX
+        lastX = x
+        onDrag?(dx)
+    }
+}
 final class FadeOverlay: NSView {
     var topColor: NSColor = .black
     var midColor: NSColor?
@@ -976,6 +1014,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var topFadeMask: CAGradientLayer?
     private var topBlurView: NSView?
     private var topScrim: FadeOverlay?
+    /// 左栏宽度约束（可拖拽调整）
+    private var sidebarWidthConstraint: NSLayoutConstraint!
+    /// 右栏宽度约束
+    private var rightWidthConstraint: NSLayoutConstraint!
+    /// 当前栏宽（拖拽时改这两个值）
+    private var sidebarWidth: CGFloat = 200
+    private var rightWidth: CGFloat = 300
     private var baseGlass: NSVisualEffectView?
     private var baseTint: NSView?
     private var topTitle: NSTextField?
@@ -1205,7 +1250,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                                             constant: 200),
         ])
 
-        for v in [sidebar, middle, right, topBar] {
+        // 宽度约束先建好（后面拖拽时改 constant）
+        sidebarWidthConstraint = sidebar.widthAnchor.constraint(equalToConstant: sidebarWidth)
+        rightWidthConstraint = right.widthAnchor.constraint(equalToConstant: rightWidth)
+
+        // ── 栏间拖拽条 ──
+        let leftHandle = ResizeHandle()
+        leftHandle.side = .leftPane
+        leftHandle.translatesAutoresizingMaskIntoConstraints = false
+        leftHandle.onDrag = { [weak self] dx in
+            guard let self else { return }
+            let newW = min(420, max(160, self.sidebarWidth + dx))
+            self.sidebarWidth = newW
+            self.sidebarWidthConstraint.constant = newW
+            self.relayoutGridColumns()
+        }
+
+        let rightHandle = ResizeHandle()
+        rightHandle.side = .rightPane
+        rightHandle.translatesAutoresizingMaskIntoConstraints = false
+        rightHandle.onDrag = { [weak self] dx in
+            guard let self else { return }
+            // 右栏向右拖 = 变窄，所以取反
+            let newW = min(460, max(220, self.rightWidth - dx))
+            self.rightWidth = newW
+            self.rightWidthConstraint.constant = newW
+            self.relayoutGridColumns()
+        }
+
+        for v in [sidebar, middle, right, topBar, leftHandle, rightHandle] {
             container.addSubview(v)
         }
 
@@ -1238,7 +1311,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 左上角 12pt 边距由 logo 与面板共同体现
             sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 84),
             sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
-            sidebar.widthAnchor.constraint(equalToConstant: 200),
+            // 宽度可变：由拖拽条调整（约束存在属性里，拖动时改 constant）
+            sidebarWidthConstraint,
             // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
             sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
 
@@ -1254,7 +1328,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 与左栏同高：顶栏已无背景，不再需要让位
             right.topAnchor.constraint(equalTo: container.topAnchor, constant: 84),
             right.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
-            right.widthAnchor.constraint(equalToConstant: 300),
+            rightWidthConstraint,
+
+            // ── 拖拽条：贴在栏间缝隙上 ──
+            leftHandle.centerXAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 4),
+            leftHandle.topAnchor.constraint(equalTo: sidebar.topAnchor),
+            leftHandle.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+            leftHandle.widthAnchor.constraint(equalToConstant: 10),
+
+            rightHandle.centerXAnchor.constraint(equalTo: right.leadingAnchor, constant: -4),
+            rightHandle.topAnchor.constraint(equalTo: right.topAnchor),
+            rightHandle.bottomAnchor.constraint(equalTo: right.bottomAnchor),
+            rightHandle.widthAnchor.constraint(equalToConstant: 10),
             right.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
         ])
 
