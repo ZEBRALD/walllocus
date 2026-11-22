@@ -1251,7 +1251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
             // ── 右栏：独立圆角面板 ──
             // 右栏在顶栏浮层下方开始，留出可见的缝
-            right.topAnchor.constraint(equalTo: container.topAnchor, constant: 72 + 16),
+            // 与左栏同高：顶栏已无背景，不再需要让位
+            right.topAnchor.constraint(equalTo: container.topAnchor, constant: 84),
             right.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
             right.widthAnchor.constraint(equalToConstant: 300),
             right.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
@@ -1566,7 +1567,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 顶部内边距：避让顶部的渐变模糊层（图库本身可以滚到它下面）
         // 比顶栏高度多留 28：图片滚到顶栏下方时，
         // 上方的渐变模糊才有作用空间（否则第一行紧贴边缘，看不出淡出）
-        thumbnailGrid.setTopContentInset(100)
+        // 顶栏已无背景，只需让出标题行的高度（logo 中心 47 + 少量留白）
+        thumbnailGrid.setTopContentInset(52)
         // 图库在顶部 100pt 内渐隐，替代「顶栏模糊」（顶栏是兄弟视图，
         // 玻璃采不到它的内容，只能让图库自己淡出）
         // thumbnailGrid.setTopFade(height: 100)   // 临时禁用，验证滚动
@@ -1623,7 +1625,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 滚动条会被推到离 pane 边缘 18pt 处（实测），与中栏的 3pt 明显不一致。
         // 改成 0 后滚动条贴到与中栏相同的位置，文字与滚动条之间的呼吸由内容自身留白提供。
         // 顶部留出顶栏高度（76），因为顶栏现在是浮层
-        root.edgeInsets = NSEdgeInsets(top: 76 + 8, left: 16, bottom: 16, right: 0)
+        // 元素上移：顶栏已无背景，不再需要较大的顶部内边距
+        root.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 0)
         // 不在这里定 translatesAutoresizingMaskIntoConstraints：
         // 右栏的 root 由 syncDetailDocSize 用 frame 摆放，
         // 在 doc.addSubview 处统一设为 true。
