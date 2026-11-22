@@ -294,9 +294,10 @@ final class SidebarNavigator: NSView {
             // 红绿灯区(40) + 标题区(56)
             // 标题已移到中栏顶部，左栏直接显示库/预设/显示器列表
             scroll.topAnchor.constraint(equalTo: topAnchor, constant: 16),
-            // 左右各缩进 8：给选中条留出与面板边缘的呼吸
-            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            // 横向不再内缩：让滚动条贴到面板右缘，与中栏、右栏保持一致。
+            // 选中条与边缘的呼吸由 cell 自己的左右内边距承担。
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor),
 
             // 底部让出选中项信息区
             scroll.bottomAnchor.constraint(equalTo: infoBox.topAnchor, constant: -8),
