@@ -103,10 +103,10 @@ final class SidebarNavigator: NSView {
         // 用 sidebar 材质（系统侧栏观感）+ 略重的 tint 拉开层次。
         let blur = NSVisualEffectView()
         blur.material = .sidebar
-        // .withinWindow：毛玻璃采样的是「本窗口内、这层之下的内容」，
-        // 也就是窗口自己的深色底。用 .behindWindow 会直接透到桌面壁纸，
-        // 侧栏颜色会随桌面变化，与软件本体的 UI 底色割裂。
-        blur.blendingMode = .withinWindow
+        // .behindWindow + 不透明窗口 = 只看到软件自己的底色。
+        // 窗口已是 isOpaque=true 且有不透明背景色，屏幕背后不会透出来；
+        // 用 .withinWindow 反而会采到玻璃层自身，导致整栏发亮。
+        blur.blendingMode = .behindWindow
         blur.state = .active
         blur.translatesAutoresizingMaskIntoConstraints = false
         // 玻璃层也要裁圆，否则它会在父视图圆角外露出直角
@@ -134,7 +134,9 @@ final class SidebarNavigator: NSView {
 
         let tint = NSView()
         tint.wantsLayer = true
-        tint.layer?.backgroundColor = NSColor(white: 0, alpha: 0.10).cgColor
+        // 压暗：.sidebar 材质在深色底上会偏亮（它是为浅色系统 UI 设计的），
+        // 加一层更重的黑色 tint 把它拉回到与底色同色系
+        tint.layer?.backgroundColor = NSColor(white: 0, alpha: 0.42).cgColor
         tint.translatesAutoresizingMaskIntoConstraints = false
         blur.addSubview(tint)
         NSLayoutConstraint.activate([
@@ -223,6 +225,10 @@ final class SidebarNavigator: NSView {
         scroll.wantsLayer = true
         scroll.layer?.cornerRadius = 10
         scroll.layer?.masksToBounds = true
+        // 透明背景：让整栏颜色一致，不要出现「标题区深、列表区浅」的断层
+        scroll.drawsBackground = false
+        scroll.backgroundColor = .clear
+        outline.backgroundColor = .clear
 
         NSLayoutConstraint.activate([
             // scroll 从顶栏下方开始：这样列表第一行不会被浮层压住，

@@ -1014,10 +1014,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         w.center()
         w.isReleasedWhenClosed = false
 
-        // 让窗口能露出毛玻璃：标题栏透明、窗口自身不画实底
+        // 窗口自身不透明，并由它提供基础底色。
+        // 侧栏毛玻璃用 .withinWindow 采样这层底色 —— 桌面不会透进来。
+        // （早先为了「透出桌面」设成 isOpaque=false + clear，现在设计改了：
+        //   要求毛玻璃只透软件自己的 UI 底色。）
         w.titlebarAppearsTransparent = true
-        w.isOpaque = false
-        w.backgroundColor = .clear
+        w.isOpaque = true
+        w.backgroundColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 1.0)
         // 内容延伸到标题栏下方，否则顶部会留一条与内容割裂的横带
         w.styleMask.insert(.fullSizeContentView)
         // 固定深色外观：毛玻璃在浅色外观下会发白，和壁纸缩略图深底不搭
@@ -1081,11 +1084,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 四周内缩 8pt、10pt 圆角、有自己的一层 liquid glass。
             // 侧栏从窗口顶端开始：红绿灯要嵌在面板内部，
             // 面板顶部留出 ~44pt 给它（内部列表再往下让位）。
-            // 面板顶部贴到窗口顶：系统的红绿灯固定在 y≈8..24，
-            // 面板若下移，圆角边缘就会从按钮中间穿过（看起来像「压在边上」）。
-            // 贴顶后红绿灯完整落在面板内部的顶部留白里（照片 App 就是这样）。
+            // 侧栏贴窗口左上角（内缩 0）。
+            // 红绿灯由系统钉在距窗口左/上约 8pt，面板只要内缩就会把它们挤到外面；
+            // 贴边后面板圆角自然把它们包住在内部的留白里（照片 App 的做法）。
             sidebar.topAnchor.constraint(equalTo: container.topAnchor),
-            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             sidebar.widthAnchor.constraint(equalToConstant: 260),
             // 底部贴齐窗口：中栏是通铺的，左右栏若留 8pt 会显得「没铺满」
             sidebar.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
@@ -1366,9 +1369,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         pane.translatesAutoresizingMaskIntoConstraints = false
         // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
         // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
-        // 与侧栏一致：只采样窗口内的深色底，不透到桌面
-        _ = addGlass(to: pane, material: .sidebar, blending: .withinWindow,
-                     tint: 0.16, cornerRadius: 10)
+        // 与侧栏一致：窗口不透明，behindWindow 采到的就是软件自己的底色
+        _ = addGlass(to: pane, material: .sidebar, blending: .behindWindow,
+                     tint: 0.42, cornerRadius: 10)
         // pane 自身也裁圆，否则子视图（滚动区）会把圆角盖掉
         pane.wantsLayer = true
         pane.layer?.cornerRadius = 10
