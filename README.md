@@ -29,11 +29,11 @@ Swap displays or wallpapers and the previous framing comes back exactly. Most wa
 
 Three panes, modelled on the macOS Photos app:
 
-- **Sidebar** — displays, library categories, presets. The three groups default to Displays → Library → Presets, reorderable in settings
-- **Grid** — the library. Thumbnails tile the space, five columns, corners clipped to each image's own aspect ratio
+- **Sidebar** — displays, library categories, presets, in that order by default and reorderable in settings
+- **Grid** — the library. Five columns running edge to edge, thumbnails rounded to each image's own aspect ratio
 - **Details** — file information, framing controls, and actions for the selected item
 
-Both side panes resize by dragging their edges, and the widths persist. All three panes share one liquid-glass base whose rim tints with the wallpaper's colour temperature.
+Both side panes resize by dragging their edges, and the widths persist. All three share one liquid-glass base whose rim tints with the wallpaper's colour temperature, and the window's corners match the panels' curvature.
 
 ## Features
 
@@ -55,25 +55,38 @@ Both side panes resize by dragging their edges, and the widths persist. All thre
 - **Presets**: capture which wallpaper each display uses along with its framing; right-click to apply, rename, or delete
 - **Bilingual UI**, following the system language
 
+## Dropping a file copies it
+
+Dropping an image from Finder **copies** the file into the wallpaper folder; the original stays where it was:
+
+| The dropped file | Result |
+| --- | --- |
+| Already in the wallpaper folder | Used as is, not copied |
+| Anywhere else | Copied in; the original remains |
+| Name collision | Suffixed `-2` / `-3`, never overwritten |
+| Copy fails | Falls back to the original path rather than blocking the add |
+
+This keeps the library self-contained: moving or deleting the original later does not break anything in the app. The cost is a second copy on disk.
+
 ## Measured overhead
 
 Apple silicon, macOS 26, three displays each showing a 2160×2880 still image:
 
 | Metric                     | Value            |
 | -------------------------- | ---------------- |
-| Physical footprint         | **~197 MB**      |
-| CPU (image displays)       | **0.0 %**        |
+| Physical footprint         | **~245 MB**      |
+| CPU (image displays, idle) | **0.1 – 0.7 %**  |
 | CPU (4K video display)     | **1.6 – 3.4 %**  |
 | CPU (fullscreen app open)  | **0.0 %**        |
-| Library of 60 items        | **+1.6 MB**      |
+| Library of 300 items       | **~+2 MB**       |
 
-Memory is dominated by decoded bitmaps, so it scales with how many displays are driven and how large the sources are — roughly 24 MB per display for a 2160×2880 source, one copy each, released as soon as no display needs it.
+Memory is dominated by decoded bitmaps, so it scales with how many displays are driven and how large the sources are — roughly 24 MB per display for a 2160×2880 source, up to four kept, released as soon as no display needs them.
 
-The library adds very little: thumbnails decode at **their real display size × the screen scale** (about 480px on a Retina screen), only for visible cards, into a 48 MB cache. **Adding files to the library triggers no decoding at all.**
+The library itself adds little: thumbnails decode at **their real display size × the screen scale** (about 480px on a Retina screen), only for visible cards, into a 48 MB cache. **Adding files to the library triggers no decoding at all.**
 
 CPU is what genuinely sits at zero.
 
-> Note: `ps` reports a much higher RSS (~190 MB) because it counts mapped pages from shared system libraries. Use `footprint -p <pid>` or `vmmap --summary` for the real figure.
+> Note: `ps` reports a much higher RSS (~314 MB) because it counts mapped pages from shared system libraries. Use `footprint -p <pid>` or `vmmap --summary` for the real figure.
 
 ## Requirements
 
@@ -155,6 +168,8 @@ Launch at login uses a `LaunchAgent`: `~/Library/LaunchAgents/app.walllocus.auto
 **The Dock icon disappeared.** It hides when the window closes; the menu bar icon remains. Click it and choose "Open WallLocus".
 
 **A file added in Finder does not appear.** Right-click empty space in the grid and choose **Refresh now**, or relaunch the app.
+
+**Does dropping a file move my original?** No — it copies into the wallpaper folder and leaves the original in place.
 
 ## Licence
 
