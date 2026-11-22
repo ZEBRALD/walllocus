@@ -2094,12 +2094,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 滑块与数值框沿中线对齐
         row.alignment = .centerY
         row.translatesAutoresizingMaskIntoConstraints = false
-        row.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let rowW = row.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(rowW)
+        rowW.isActive = true
 
         let s = NSStackView(views: [l, row])
         s.orientation = .vertical
         s.alignment = .leading
         s.spacing = 3
+        // 外层容器也要跟随宽度，否则 row 拉伸时外层不动
+        s.translatesAutoresizingMaskIntoConstraints = false
+        let sW = s.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(sW)
+        sW.isActive = true
         return s
     }
 
@@ -2474,7 +2481,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         v.layer?.backgroundColor = NSColor(srgbRed: 0.34, green: 0.35, blue: 0.37, alpha: 1).cgColor
         v.translatesAutoresizingMaskIntoConstraints = false
         v.heightAnchor.constraint(equalToConstant: 1).isActive = true
-        v.widthAnchor.constraint(equalToConstant: width).isActive = true
+        let w = v.widthAnchor.constraint(equalToConstant: width)
+        detailWidthConstraints.append(w)
+        w.isActive = true
         return v
     }
 
