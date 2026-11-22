@@ -2571,6 +2571,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         load.representedObject = p.id
         menu.addItem(load)
 
+        let rename = NSMenuItem(title: L10n.t("preset.rename"),
+                                action: #selector(renamePresetFromMenu(_:)),
+                                keyEquivalent: "")
+        rename.target = self
+        rename.representedObject = p.id
+        menu.addItem(rename)
+
+        menu.addItem(.separator())
+
         let del = NSMenuItem(title: L10n.t("preset.delete"),
                              action: #selector(deletePresetFromMenu(_:)),
                              keyEquivalent: "")
@@ -2578,6 +2587,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         del.representedObject = p.id
         menu.addItem(del)
         return menu
+    }
+
+    /// 重命名预设：右键菜单入口
+    @objc private func renamePresetFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let p = state.presets.first(where: { $0.id == id }) else { return }
+        guard let input = promptForPresetName(defaultValue: p.name) else { return }
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != p.name else { return }
+
+        StateStore.shared.update { st in
+            guard let i = st.presets.firstIndex(where: { $0.id == id }) else { return }
+            st.presets[i].name = trimmed
+        }
+        reloadPresets()
+        // 保持选中，方便连续操作
+        sidebarSelection = .preset(id)
+        showPresetDetail(presetID: id)
     }
 
     @objc private func loadPresetFromMenu(_ sender: NSMenuItem) {

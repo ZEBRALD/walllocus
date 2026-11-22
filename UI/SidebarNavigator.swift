@@ -185,6 +185,15 @@ final class SidebarNavigator: NSView {
                 break        // 可选中的行交给 selectionChanged
             }
         }
+        // 右键：预设行给「应用 / 重命名 / 删除」，其它行不弹菜单
+        outline.onMenuRow = { [weak self] row, view in
+            guard let self,
+                  let node = self.outline.item(atRow: row) as? Node else { return nil }
+            if case .preset(let p) = node.kind {
+                return self.onPresetMenu?(p.id, view)
+            }
+            return nil
+        }
         outline.autoresizesOutlineColumn = false
 
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("main"))
@@ -386,6 +395,8 @@ final class SidebarNavigator: NSView {
     /// 点「新建分类」这类「立即取消选中」的行时，回调可能根本不来。
     final class ClickOutlineView: NSOutlineView {
         var onClickRow: ((Int) -> Void)?
+        /// 右键菜单：传入行号与视图，返回要弹出的菜单
+        var onMenuRow: ((Int, NSView) -> NSMenu?)?
 
         override func mouseDown(with event: NSEvent) {
             let pt = convert(event.locationInWindow, from: nil)
@@ -394,6 +405,16 @@ final class SidebarNavigator: NSView {
                 onClickRow?(row)
             }
             super.mouseDown(with: event)
+        }
+
+        /// 右键：先选中该行，再弹出对应菜单。
+        /// NSOutlineView 默认不提供行级右键，必须自己接。
+        override func menu(for event: NSEvent) -> NSMenu? {
+            let pt = convert(event.locationInWindow, from: nil)
+            let row = self.row(at: pt)
+            guard row >= 0 else { return nil }
+            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            return onMenuRow?(row, self)
         }
     }
 
