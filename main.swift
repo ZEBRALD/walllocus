@@ -1315,6 +1315,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.rightWidthConstraint.constant = newW
             Settings.paneDetailWidth = newW
             self.updateMiddleWidth()
+            // 右栏元素宽度跟着变（syncDetailDocSize 内部会重算）
+            DispatchQueue.main.async { self.syncDetailDocSize() }
             self.relayoutGridColumns()
         }
 
