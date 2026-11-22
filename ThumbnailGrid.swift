@@ -402,9 +402,9 @@ final class ThumbnailGrid: NSView {
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: topAnchor),
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
-            // 右缘外扩 3pt：overlay 滚动条自带内缩，
-            // 不外扩就比左栏/右栏的滚动条偏左 3pt。
-            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 3),
+            // 右缘外扩 8pt：overlay 滚动条自带内缩，
+            // 外扩以抵消它，让滚动条与另两栏处于同一视觉列。
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: 8),
 
             // 分页已取消：图库直接铺到底，不再给分页条留位
             scroll.bottomAnchor.constraint(equalTo: bottomAnchor),
