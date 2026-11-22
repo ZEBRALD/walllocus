@@ -1673,8 +1673,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             self.libraryPopup.selectItem(at: idx)
             StateStore.shared.update { st in st.lastSelectedItem = path }
             self.refreshControls()
-            self.window.makeFirstResponder(self.nameField)
-            self.nameField.selectText(nil)
         }
         thumbnailGrid.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1797,51 +1795,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         root.addArrangedSubview(separator(width: 270))
 
-        // 名称编辑
-        let nameLabel = NSTextField(labelWithString: L10n.t("win.itemName"))
-        nameLabel.font = NSFont.systemFont(ofSize: 11)
-        nameLabel.textColor = .secondaryLabelColor
-        root.addArrangedSubview(nameLabel)
-
-        nameField.cell = VerticallyCenteredFieldCell()
-        nameField.isEditable = true
-        nameField.font = NSFont.systemFont(ofSize: 12)
-        styleRoundedField(nameField)
-        nameField.placeholderString = L10n.t("win.namePlaceholder")
-        nameField.target = self
-        nameField.action = #selector(nameFieldCommitted(_:))
-        nameField.delegate = self
-        nameField.translatesAutoresizingMaskIntoConstraints = false
-        // 不写死宽度：英文下按钮文案更长（"Use File Name"），
-        // 写死 200 会让整行超出右栏的 270pt。由整行约束决定输入框可用宽度。
-
-        resetNameButton.title = L10n.t("menu.resetName")
-        // 用 .texturedRounded 代替 .rounded：后者的 bezel 自带上下阴影边距，
-        // 即使给了 26pt 高度约束，视觉上仍比旁边的输入框高出一截。
-        resetNameButton.bezelStyle = .texturedRounded
-        resetNameButton.controlSize = .regular
-        resetNameButton.font = NSFont.systemFont(ofSize: 11)
-        resetNameButton.target = self
-        resetNameButton.action = #selector(resetNameForSelection)
-        resetNameButton.isEnabled = false
-        resetNameButton.translatesAutoresizingMaskIntoConstraints = false
-        resetNameButton.heightAnchor.constraint(equalToConstant: 26).isActive = true
-        resetNameButton.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
-
-        let nameRow = NSStackView(views: [nameField, resetNameButton])
-        nameRow.orientation = .horizontal
-        nameRow.spacing = 6
-        nameRow.alignment = .centerY
-        nameRow.translatesAutoresizingMaskIntoConstraints = false
-        // 整行锁定右栏内容宽度：输入框吃掉剩余空间，按钮按自身文案宽度自适应。
-        // 这样中英文切换都不会溢出。
-        let nameRowW = nameRow.widthAnchor.constraint(equalToConstant: 270)
-        detailWidthConstraints.append(nameRowW)
-        nameRowW.isActive = true
-        // 输入框可以被压缩，按钮保持完整（文字不能被截断）
-        nameField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        nameField.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        root.addArrangedSubview(nameRow)
 
         // 壁纸文件详情：文件名 / 分辨率 / 大小 / 分类 / 位置。
         // 这些是只读信息，用多行标签呈现，不占额外的行高。
@@ -2612,7 +2565,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             st.library[i].alias = nil
         }
         // 名称框同步清空（此时显示的是文件名占位）
-        nameField.stringValue = ""
         reloadLibrary()
     }
 
@@ -2621,24 +2573,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         guard let item = state.library.first(where: { $0.path == path }) else { return nil }
         let menu = NSMenu()
 
-        let rename = NSMenuItem(title: L10n.t("menu.rename"),
-                                action: #selector(beginRenameFromCard(_:)),
-                                keyEquivalent: "")
-        rename.target = self
-        rename.representedObject = path
-        menu.addItem(rename)
+        // 改名走访达：UI 不再提供入口（用文件名即可）
 
-        // 已设过别名才给「恢复文件名」
-        if item.hasAlias {
-            let reset = NSMenuItem(title: L10n.t("menu.resetName"),
-                                   action: #selector(resetNameFromCard(_:)),
-                                   keyEquivalent: "")
-            reset.target = self
-            reset.representedObject = path
-            menu.addItem(reset)
-        }
-
-        menu.addItem(.separator())
 
         let assign = NSMenuItem(title: L10n.t("win.setWallpaper"),
                                 action: #selector(assignFromCard(_:)),
@@ -2672,9 +2608,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         libraryPopup.selectItem(at: idx)
         StateStore.shared.update { st in st.lastSelectedItem = path }
         refreshControls()
-        // 把焦点送进名称框，直接进入编辑状态
-        window.makeFirstResponder(nameField)
-        nameField.selectText(nil)
     }
 
     @objc private func resetNameFromCard(_ sender: NSMenuItem) {
@@ -2771,8 +2704,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         loadPresetButton.isEnabled = false
         guard let item = selectedItem else {
             scopeLabel.stringValue = L10n.t("win.scope.none")
-            nameField.stringValue = ""
-            nameField.isEnabled = false
+
             paneTitle.stringValue = L10n.t("win.scope.none")
             paneSubtitle.stringValue = ""
             previewPane.show(path: nil, fallbackText: L10n.t("preview.noSelection"))
@@ -2785,12 +2717,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             return
         }
         // 名称框跟随选中素材；正在编辑时不要覆盖用户输入
-        nameField.isEnabled = true
-        if window?.firstResponder !== nameField.currentEditor() {
-            nameField.stringValue = item.alias ?? ""
-        }
+
         // 没有别名时「恢复文件名」无意义，置灰
-        resetNameButton.isEnabled = item.hasAlias
         refreshStopButton()
         refreshPresetButtons()
         adjustControlsEnabled(true)
