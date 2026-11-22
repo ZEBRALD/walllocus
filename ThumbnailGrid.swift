@@ -271,6 +271,7 @@ final class ThumbnailGrid: NSView {
     private(set) var rows = 3
     private var page = 0
     private var collectionScrollView: NSScrollView?
+    private var topFadeMask: CAGradientLayer?
 
     private var allItems: [LibraryItem] = []
     private var inUsePaths: Set<String> = []
@@ -373,6 +374,40 @@ final class ThumbnailGrid: NSView {
     /// 按可用宽度与列数算出卡片尺寸。
     /// 宽度必须精确等于「可用宽 / 列数」：NSCollectionViewFlowLayout 只要一行塞得下
     /// 就会多塞，卡片稍窄就会出现比设定更多的列（实测出现过 5 列、7 列）。
+    /// 顶部渐隐：让滚到上方的内容淡出到透明。
+    ///
+    /// 这是替代「顶栏模糊」的正确做法 —— NSVisualEffectView 采不到
+    /// 同级兄弟视图的内容（顶栏与图库是兄弟，玻璃只能模糊自己的子视图），
+    /// 所以顶栏怎么设都糊不到图库。让图库自己在顶部渐隐更可靠。
+    func setTopFade(height: CGFloat) {
+        guard height > 0 else { return }
+        scroll.wantsLayer = true
+        let mask = CAGradientLayer()
+        mask.colors = [
+            NSColor.clear.cgColor,          // 顶部完全透明（淡出）
+            NSColor.black.cgColor,          // 往下到不透明
+        ]
+        mask.locations = [0.0, 1.0]
+        // 换算成整条滚动区的比例
+        let total = max(1, scroll.bounds.height)
+        let ratio = min(1.0, height / total)
+        mask.locations = [NSNumber(value: 0.0), NSNumber(value: ratio)]
+        mask.startPoint = CGPoint(x: 0.5, y: 1.0)   // 上
+        mask.endPoint = CGPoint(x: 0.5, y: 1.0 - ratio)
+        self.topFadeMask = mask
+        scroll.layer?.mask = mask
+        syncTopFadeMask()
+    }
+
+    /// CAGradientLayer 不会跟随视图尺寸，需手动同步
+    func syncTopFadeMask() {
+        guard let mask = topFadeMask else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        mask.frame = scroll.bounds
+        CATransaction.commit()
+    }
+
     /// 设置内容顶部内边距。
     ///
     /// 图库现在从面板顶端开始（图片能滚到顶部渐变模糊层下方），
@@ -544,8 +579,10 @@ final class ThumbnailGrid: NSView {
     /// 按当前行数与卡片尺寸设置 collection 高度，使其能滚动。
     /// documentView 交给 Auto Layout 处理高度在这条链上不可靠（实测滚不动），
     /// 所以直接设 frame。
+
     private func updateCollectionHeight() {
         guard let scroll = collectionScrollView else { return }
+        // 诊断：内容高度 vs 可视高度
         let w = scroll.contentView.bounds.width
         guard w > 0 else { return }
         let visibleCount = pageItems.count
@@ -576,6 +613,7 @@ final class ThumbnailGrid: NSView {
     override func layout() {
         super.layout()
         updateCollectionHeight()
+        syncTopFadeMask()
         onGeometryChange?()
     }
 

@@ -71,12 +71,19 @@ final class DashedBorderView: NSView {
     }
 }
 
+/// 不参与鼠标事件响应的容器。
+/// alphaValue 为 0 / isHidden 状态下仍可能参与 hitTest 并吞事件，
+/// 表现为「底下的图库滚不动」——显式返回 nil 彻底放行。
+final class PassthroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
 final class DropZoneView: NSView {
 
     /// 用户松手后回调可用的素材路径
     var onDrop: (([String]) -> Void)?
 
-    private let overlay = NSView()
+    /// 拖拽提示浮层：外层不响应鼠标事件（否则会吞掉图库的滚动）
+    private let overlay = PassthroughView()
     /// 毛玻璃：把底层素材库糊掉，让上层提示跳出来
     private let blurView = NSVisualEffectView()
     /// 半透明压暗层，进一步提升文字对比度

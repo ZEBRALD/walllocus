@@ -1419,8 +1419,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         let topBlur = NSVisualEffectView()
         topBlur.material = .headerView
-        // 与其它层一致：采样窗口背后（桌面），让整窗环境色统一
-        topBlur.blendingMode = .behindWindow
+        // 必须 withinWindow：顶栏要模糊的是「从下面滚上来的图库内容」，
+        // 用 behindWindow 采的是窗口背后的桌面，图片滚过来时一点都不会被糊。
+        topBlur.blendingMode = .withinWindow
         topBlur.state = .active
         topBlur.translatesAutoresizingMaskIntoConstraints = false
         topBlur.wantsLayer = true
@@ -1441,8 +1442,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 实际是靠「模糊 + 上方 scrim 压实 + 下方淡出」组合出来的，
         // 滚动时图片进入上半部会被 scrim 压住，越往下越清晰。
         let scrim = FadeOverlay()
-        scrim.topColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.72)
-        scrim.midColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.30)
+        scrim.topColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.88)
+        scrim.midColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145,
+                                 alpha: 0.45)
         scrim.bottomColor = NSColor(srgbRed: 0.129, green: 0.133, blue: 0.145, alpha: 0.0)
         scrim.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(scrim)
@@ -1595,6 +1597,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 比顶栏高度多留 28：图片滚到顶栏下方时，
         // 上方的渐变模糊才有作用空间（否则第一行紧贴边缘，看不出淡出）
         thumbnailGrid.setTopContentInset(100)
+        // 图库在顶部 100pt 内渐隐，替代「顶栏模糊」（顶栏是兄弟视图，
+        // 玻璃采不到它的内容，只能让图库自己淡出）
+        // thumbnailGrid.setTopFade(height: 100)   // 临时禁用，验证滚动
 
         return pane
     }
