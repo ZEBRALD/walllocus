@@ -89,7 +89,11 @@ final class ThumbnailItem: NSCollectionViewItem {
     /// 缩略图高度跟随卡片尺寸：卡片变高时缩略图同步变高，
     /// 否则卡片宽/高比会失真（列数看起来会跳变）。
     /// 卡片高 92 时原值为 70，即缩略图约占卡片高的 76%。
-    static var thumbHeight: CGFloat { round(cardSize.height * 0.76) }
+    /// 是否显示文件名（隐藏时缩略图占满卡片高度）
+    static var showsFileNames = true
+    static var thumbHeight: CGFloat {
+        showsFileNames ? round(cardSize.height * 0.76) : cardSize.height
+    }
 
     private let thumbView = RoundedImageView()
     private let nameLabel = NSTextField(labelWithString: "")
@@ -207,6 +211,7 @@ final class ThumbnailItem: NSCollectionViewItem {
     func configure(path: String, title: String, originalName: String, kind: MediaKind, inUse: Bool) {
         // 卡片尺寸会随窗口缩放变化，缩略图高度必须同步，否则卡片会被压扁/拉伸
         thumbHeightConstraint?.constant = Self.thumbHeight
+        nameLabel.isHidden = !Self.showsFileNames
         representedPath = path
         nameLabel.stringValue = title
         badge.isHidden = (kind != .video)
@@ -439,6 +444,16 @@ final class ThumbnailGrid: NSView {
     ///
     /// 图库现在从面板顶端开始（图片能滚到顶部渐变模糊层下方），
     /// 但初始位置要避开那层，否则第一行会被模糊遮住。
+    /// 切换是否显示文件名。隐藏时缩略图占满卡片高度，需重排。
+    func setShowsFileNames(_ show: Bool) {
+        ThumbnailItem.showsFileNames = show
+        // 已有卡片立即更新
+        for item in collection.visibleItems() {
+            (item as? ThumbnailItem)?.refreshCardSize()
+        }
+        collection.reloadData()
+    }
+
     func setTopContentInset(_ inset: CGFloat) {
         scroll.automaticallyAdjustsContentInsets = false
         scroll.contentInsets = NSEdgeInsets(top: inset, left: 0, bottom: 0, right: 0)

@@ -543,7 +543,7 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
             v.addSubview(dot)
             NSLayoutConstraint.activate([
                 // 与分组标题行的折叠箭头同列：实测绿点比箭头偏左 9pt
-                dot.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: 3),
+                dot.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: 2),
                 dot.centerYAnchor.constraint(equalTo: v.centerYAnchor),
                 dot.widthAnchor.constraint(equalToConstant: 7),
                 dot.heightAnchor.constraint(equalToConstant: 7),

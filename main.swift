@@ -507,6 +507,16 @@ enum Settings {
     /// 壁纸文件存放目录。首次使用时默认 ~/Pictures/WallLocus，
     /// 用户也可以改成任意目录。新添加的素材会被复制到这里集中管理。
     /// 左栏宽度（拖拽调整后持久化）
+    /// 网格里是否显示图片文件名（默认显示）
+    static var showGridFileNames: Bool {
+        get {
+            let d = UserDefaults.standard
+            if d.object(forKey: "showGridFileNames") == nil { return true }
+            return d.bool(forKey: "showGridFileNames")
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "showGridFileNames") }
+    }
+
     static var paneSidebarWidth: CGFloat {
         get {
             let v = UserDefaults.standard.double(forKey: "paneSidebarWidth")
@@ -1148,6 +1158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 放在窗口建好之后：这样弹窗有父窗口可依附，不会飘在桌面中央。
         ensureWallpaperFolder()
         scanWallpaperFolder()
+        // 应用「网格显示文件名」设置
+        ThumbnailItem.showsFileNames = Settings.showGridFileNames
         reloadLibrary()
         reloadPresets()
         WallpaperManager.shared.applyAll()
@@ -2264,6 +2276,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 设置菜单。按功能分组成二级子菜单，避免一长串平铺项。
+    /// 切换网格里文件名显示
+    @objc private func toggleGridFileNames() {
+        Settings.showGridFileNames.toggle()
+        thumbnailGrid.setShowsFileNames(Settings.showGridFileNames)
+        // 文件名显隐会改变卡片高度，需要重排
+        relayoutGridColumns()
+    }
+
     @objc private func showSettingsMenu() {
         let menu = NSMenu()
 
@@ -2291,6 +2311,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // ── 壁纸库 ────────────────────────────────────────
         let library = NSMenuItem(title: L10n.t("setting.library"), action: nil, keyEquivalent: "")
         let librarySub = NSMenu()
+
+        // 网格文件名显隐
+        let showNames = NSMenuItem(title: L10n.t("setting.showFileNames"),
+                                   action: #selector(toggleGridFileNames),
+                                   keyEquivalent: "")
+        showNames.target = self
+        showNames.state = Settings.showGridFileNames ? .on : .off
+        librarySub.addItem(showNames)
 
         librarySub.addItem(.separator())
         let cur = NSMenuItem(title: L10n.t("setting.currentFolder", Settings.wallpaperFolder.path),
