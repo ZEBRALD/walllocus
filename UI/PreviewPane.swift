@@ -15,6 +15,9 @@ final class PreviewPane: NSView {
     static let previewMaxPixel: CGFloat = 480
 
     private let imageView = NSImageView()
+    /// 包住图片的圆角容器
+    private let clipBox = NSView()
+
     private let placeholder = NSTextField(labelWithString: "")
     private var currentPath: String?
     private var requestToken = 0
@@ -38,12 +41,17 @@ final class PreviewPane: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         layer?.borderWidth = 0
 
+        // 用容器包住图片：容器设圆角 + masksToBounds 是最可靠的裁切方式。
+        // 直接给 NSImageView 设圆角/mask 都不生效 —— 图片走内部绘制路径。
+        clipBox.wantsLayer = true
+        clipBox.layer?.cornerRadius = 12
+        clipBox.layer?.masksToBounds = true
+        clipBox.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(clipBox)
+
         imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.wantsLayer = true
-        imageView.layer?.cornerRadius = 12
-        imageView.layer?.masksToBounds = true
         imageView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(imageView)
+        clipBox.addSubview(imageView)
 
         placeholder.font = NSFont.systemFont(ofSize: 11)
         placeholder.textColor = .tertiaryLabelColor
@@ -54,10 +62,15 @@ final class PreviewPane: NSView {
         addSubview(placeholder)
 
         NSLayoutConstraint.activate([
-            imageView.topAnchor.constraint(equalTo: topAnchor),
-            imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            clipBox.topAnchor.constraint(equalTo: topAnchor),
+            clipBox.leadingAnchor.constraint(equalTo: leadingAnchor),
+            clipBox.trailingAnchor.constraint(equalTo: trailingAnchor),
+            clipBox.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            imageView.topAnchor.constraint(equalTo: clipBox.topAnchor),
+            imageView.leadingAnchor.constraint(equalTo: clipBox.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: clipBox.trailingAnchor),
+            imageView.bottomAnchor.constraint(equalTo: clipBox.bottomAnchor),
 
             placeholder.centerXAnchor.constraint(equalTo: centerXAnchor),
             placeholder.centerYAnchor.constraint(equalTo: centerYAnchor),

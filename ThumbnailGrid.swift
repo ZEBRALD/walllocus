@@ -51,6 +51,34 @@ final class CardView: NSView {
 
 // MARK: - 单个卡片
 
+/// 按图片原始比例绘制并裁圆角的图片视图。
+///
+/// 直接给 NSImageView 设 layer.cornerRadius 不够：图片比框小时
+/// （竖图常见），圆角加在框的边缘，图片自己那块小矩形仍是直角。
+/// 这里在 draw 时先算出图片按比例缩放后的实际矩形，只对它裁圆角。
+final class RoundedImageView: NSImageView {
+    var cornerRadius: CGFloat = 8
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let image, image.size.width > 0, image.size.height > 0 else { return }
+
+        // 按比例缩放到完整放入 bounds
+        let maxW = bounds.width, maxH = bounds.height
+        let scale = min(maxW / image.size.width, maxH / image.size.height)
+        let drawW = image.size.width * scale
+        let drawH = image.size.height * scale
+        let rect = NSRect(x: bounds.midX - drawW / 2,
+                          y: bounds.midY - drawH / 2,
+                          width: drawW, height: drawH)
+
+        NSGraphicsContext.saveGraphicsState()
+        let path = NSBezierPath(roundedRect: rect,
+                                xRadius: cornerRadius, yRadius: cornerRadius)
+        path.addClip()
+        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
 final class ThumbnailItem: NSCollectionViewItem {
 
     static let identifier = NSUserInterfaceItemIdentifier("ThumbnailItem")
@@ -63,7 +91,7 @@ final class ThumbnailItem: NSCollectionViewItem {
     /// 卡片高 92 时原值为 70，即缩略图约占卡片高的 76%。
     static var thumbHeight: CGFloat { round(cardSize.height * 0.76) }
 
-    private let thumbView = NSImageView()
+    private let thumbView = RoundedImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let badge = NSImageView()
     /// 「正在使用」角标：左上角小圆点
@@ -107,7 +135,7 @@ final class ThumbnailItem: NSCollectionViewItem {
 
         thumbView.imageScaling = .scaleProportionallyUpOrDown
         thumbView.wantsLayer = true
-        thumbView.layer?.cornerRadius = 8
+        thumbView.cornerRadius = 8
         thumbView.layer?.masksToBounds = true
         // 不加底色：图片按比例缩放后若有留边，就让它透出底层玻璃，
         // 否则会看到一圈深灰的「相框」。
