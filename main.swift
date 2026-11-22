@@ -1048,6 +1048,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var rightWidthConstraint: NSLayoutConstraint!
     /// 中栏宽度约束（随左右栏变化重算）
     private var middleWidthConstraint: NSLayoutConstraint!
+    /// 右栏元素宽度约束（随栏宽更新）
+    private var detailWidthConstraints: [NSLayoutConstraint] = []
     /// 当前栏宽（拖拽时改这两个值）
     private var sidebarWidth: CGFloat = Settings.paneSidebarWidth
     private var rightWidth: CGFloat = Settings.paneDetailWidth
@@ -1778,12 +1780,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         paneSubtitle.lineBreakMode = .byTruncatingMiddle
         // 长文件名会撑宽面板，必须限宽
         paneSubtitle.translatesAutoresizingMaskIntoConstraints = false
-        paneSubtitle.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let paneSubtitleW = paneSubtitle.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(paneSubtitleW)
+        paneSubtitleW.isActive = true
         root.addArrangedSubview(paneSubtitle)
 
         // 当前素材的大图预览：给"选中了什么"一个明确的视觉锚点
         previewPane.translatesAutoresizingMaskIntoConstraints = false
-        previewPane.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let previewPaneW = previewPane.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(previewPaneW)
+        previewPaneW.isActive = true
         previewPane.heightAnchor.constraint(equalToConstant: 150).isActive = true
         root.addArrangedSubview(previewPane)
 
@@ -1827,7 +1833,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         nameRow.translatesAutoresizingMaskIntoConstraints = false
         // 整行锁定右栏内容宽度：输入框吃掉剩余空间，按钮按自身文案宽度自适应。
         // 这样中英文切换都不会溢出。
-        nameRow.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let nameRowW = nameRow.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(nameRowW)
+        nameRowW.isActive = true
         // 输入框可以被压缩，按钮保持完整（文字不能被截断）
         nameField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         nameField.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -1847,7 +1855,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         fileInfoLabel.cell?.wraps = true
         fileInfoLabel.preferredMaxLayoutWidth = 270
         fileInfoLabel.translatesAutoresizingMaskIntoConstraints = false
-        fileInfoLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let fileInfoLabelW = fileInfoLabel.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(fileInfoLabelW)
+        fileInfoLabelW.isActive = true
         root.addArrangedSubview(fileInfoLabel)
 
         root.addArrangedSubview(separator(width: 270))
@@ -1898,7 +1908,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         loadPresetButton.target = self
         loadPresetButton.action = #selector(loadSelectedPresetFromButton)
         loadPresetButton.translatesAutoresizingMaskIntoConstraints = false
-        loadPresetButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let loadPresetButtonW = loadPresetButton.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(loadPresetButtonW)
+        loadPresetButtonW.isActive = true
         loadPresetButton.isHidden = true
         root.addArrangedSubview(loadPresetButton)
 
@@ -1907,7 +1919,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         assignButton.target = self
         assignButton.action = #selector(assignToTarget)
         assignButton.translatesAutoresizingMaskIntoConstraints = false
-        assignButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let assignButtonW = assignButton.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(assignButtonW)
+        assignButtonW.isActive = true
         root.addArrangedSubview(assignButton)
 
         removeButton.title = L10n.t("win.removeFromLibrary")
@@ -1915,7 +1929,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         removeButton.target = self
         removeButton.action = #selector(removeFromLibrary)
         removeButton.translatesAutoresizingMaskIntoConstraints = false
-        removeButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let removeButtonW = removeButton.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(removeButtonW)
+        removeButtonW.isActive = true
         root.addArrangedSubview(removeButton)
 
         stopButton.title = L10n.t("win.stopAll")
@@ -1923,14 +1939,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         stopButton.action = #selector(stopAll)
         stopButton.bezelStyle = .rounded
         stopButton.translatesAutoresizingMaskIntoConstraints = false
-        stopButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let stopButtonW = stopButton.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(stopButtonW)
+        stopButtonW.isActive = true
         root.addArrangedSubview(stopButton)
 
         pauseButton.bezelStyle = .rounded
         pauseButton.target = self
         pauseButton.action = #selector(togglePause)
         pauseButton.translatesAutoresizingMaskIntoConstraints = false
-        pauseButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let pauseButtonW = pauseButton.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(pauseButtonW)
+        pauseButtonW.isActive = true
         root.addArrangedSubview(pauseButton)
 
         clearCurrentButton.title = L10n.t("win.clearCurrentDisplay")
@@ -1938,7 +1958,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         clearCurrentButton.target = self
         clearCurrentButton.action = #selector(clearCurrentDisplayWallpaper)
         clearCurrentButton.translatesAutoresizingMaskIntoConstraints = false
-        clearCurrentButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let clearCurrentButtonW = clearCurrentButton.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(clearCurrentButtonW)
+        clearCurrentButtonW.isActive = true
         root.addArrangedSubview(clearCurrentButton)
 
         clearAllButton.title = L10n.t("win.clearAllDisplays")
@@ -1946,7 +1968,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         clearAllButton.target = self
         clearAllButton.action = #selector(clearAllDisplaysWallpaper)
         clearAllButton.translatesAutoresizingMaskIntoConstraints = false
-        clearAllButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let clearAllButtonW = clearAllButton.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(clearAllButtonW)
+        clearAllButtonW.isActive = true
         root.addArrangedSubview(clearAllButton)
 
         // 添加文件：放在最底部。
@@ -1954,7 +1978,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 所以不占顶部视线焦点。
         addButton.bezelStyle = .rounded
         addButton.controlSize = .regular
-        addButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 270).isActive = true
+        let addButtonW = addButton.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(addButtonW)
+        addButtonW.isActive = true
         root.addArrangedSubview(addButton)
 
         // 兼容性警告（有问题才显示）
@@ -1963,7 +1989,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         warningLabel.lineBreakMode = .byWordWrapping
         warningLabel.maximumNumberOfLines = 2
         warningLabel.translatesAutoresizingMaskIntoConstraints = false
-        warningLabel.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        let warnW = warningLabel.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(warnW)
+        warnW.isActive = true
         fixButton.bezelStyle = .rounded
         fixButton.controlSize = .small
         fixButton.target = self
@@ -2026,7 +2054,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         l.font = NSFont.systemFont(ofSize: 11)
         l.textColor = .secondaryLabelColor
         control.translatesAutoresizingMaskIntoConstraints = false
-        control.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        let ctrlW = control.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(ctrlW)
+        ctrlW.isActive = true
         let s = NSStackView(views: [l, control])
         s.orientation = .vertical
         s.alignment = .leading
@@ -2693,6 +2723,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let paneWidth = detailScroll?.superview?.bounds.width ?? 0
         let w = max(scroll.contentView.bounds.width, paneWidth)
         guard w > 120 else { return }   // 明显异常时不动，等下一轮
+
+        // 子元素宽度跟随栏宽（左右各 16 内边距）
+        let contentW = max(200, w - 32)
+        if abs((detailWidthConstraints.first?.constant ?? 0) - contentW) > 0.5 {
+            for c in detailWidthConstraints { c.constant = contentW }
+        }
 
         root.frame = NSRect(x: 0, y: 0, width: w, height: root.frame.height)
         root.layoutSubtreeIfNeeded()
