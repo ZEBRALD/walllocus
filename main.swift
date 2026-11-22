@@ -1071,16 +1071,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // logo：红绿灯 → logo → 左栏面板 三层纵向排列。
         // 放在 container 上而不是 topBar 里 —— topBar 只覆盖中栏+右栏，
         // 它的左侧不属于任何区域，放进去就看不见了。
+        // 品牌区：logo + 软件名，横向一排，位于红绿灯下方、左栏面板上方
         let logo = NSImageView()
         logo.image = NSApp.applicationIconImage
         logo.imageScaling = .scaleProportionallyUpOrDown
         logo.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(logo)
+
+        let brand = NSTextField(labelWithString: "WallLocus")
+        brand.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+        brand.textColor = .labelColor
+        brand.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(brand)
+
         NSLayoutConstraint.activate([
             logo.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            logo.topAnchor.constraint(equalTo: container.topAnchor, constant: 34),
-            logo.widthAnchor.constraint(equalToConstant: 30),
-            logo.heightAnchor.constraint(equalToConstant: 30),
+            logo.centerYAnchor.constraint(equalTo: container.topAnchor, constant: 34 + 15),
+            logo.widthAnchor.constraint(equalToConstant: 26),
+            logo.heightAnchor.constraint(equalToConstant: 26),
+
+            brand.leadingAnchor.constraint(equalTo: logo.trailingAnchor, constant: 8),
+            brand.centerYAnchor.constraint(equalTo: logo.centerYAnchor),
+            brand.trailingAnchor.constraint(lessThanOrEqualTo: container.leadingAnchor,
+                                            constant: 260),
         ])
 
         for v in [sidebar, middle, right, topBar] {
