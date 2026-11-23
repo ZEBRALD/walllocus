@@ -715,7 +715,7 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         switch node.kind {
         case .group: return 28
         case .preset: return 62      // 预设卡片要给叠图留高度
-        default: return 36           // 与照片 App 的行高对齐，选中块更有呼吸感
+        default: return 33           // 比原来的 30 稍高，选中块有呼吸感但不松散
         }
     }
 
