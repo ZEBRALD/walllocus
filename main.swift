@@ -1081,6 +1081,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let searchField = NSSearchField(frame: .zero)
     /// 点击空白结束编辑的事件监听器
     private var clickMonitor: Any?
+    /// 上次扫描时记录的文件夹指纹（用于判断磁盘是否真的变了）
+    private var lastFolderFingerprint = ""
+    /// 首次扫描是否已完成（避免 applicationDidBecomeActive 抢先扫）
+    private var didFinishInitialScan = false
     /// 文件分辨率缓存（路径 → "宽x高"），避免重复异步解析导致文字闪烁
     private var resolutionCache: [String: String] = [:]
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
@@ -1193,6 +1197,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     private var state: AppState { StateStore.shared.state }
 
+    /// App 重新回到前台时检查磁盘：用户多半刚在访达里动过文件。
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // 首次启动由 didFinishLaunching 负责，这里避免重复扫
+        guard didFinishInitialScan else { return }
+        refreshLibraryIfNeeded()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 单实例保护：已有实例在跑时直接退出，避免壁纸窗口互相打架
         let myPID = ProcessInfo.processInfo.processIdentifier
@@ -1214,6 +1225,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 放在窗口建好之后：这样弹窗有父窗口可依附，不会飘在桌面中央。
         ensureWallpaperFolder()
         scanWallpaperFolder()
+        // 记下这次扫描后的指纹与完成标记：
+        // 之后的 applicationDidBecomeActive / 切分类等只做增量判断，不重复全量扫。
+        lastFolderFingerprint = folderFingerprint()
+        didFinishInitialScan = true
         // 应用「网格显示文件名」设置
         ThumbnailItem.showsFileNames = Settings.showGridFileNames
         reloadLibrary()
@@ -1304,6 +1319,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 素材拖到左栏的显示器行 → 应用到那块屏
         sidebar.onDropWallpaper = { [weak self] path, displayID in
             self?.applyWallpaper(path: path, displayID: displayID)
+        }
+        // 右键分类行：显示文件夹位置 / 整类移到废纸篓
+        sidebar.onCategoryMenu = { [weak self] cat, view in
+            self?.makeCategoryMenu(category: cat, view: view)
         }
         // 素材拖到屏幕上的提示卡片 → 应用到那块屏
         DropCoordinator.shared.onApply = { [weak self] path, screen in
@@ -1467,23 +1486,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         ])
 
         // 用空 wrapper 当 contentView：
-        // 直接把 container 当 contentView 时，AppKit 会按内容固有宽度
-        // 反算窗口最大宽度，导致只能改高度、改不了宽度。
-        let host = NSView()
-        // 窗口内容区也裁成 16pt 圆角，与左右栏面板保持一致 ——
-        // 否则窗口四角是系统默认的小圆角，与内部面板的弧度看着不搭。
-        host.wantsLayer = true
-        host.layer?.cornerRadius = 22
-        host.layer?.masksToBounds = true
-        w.contentView = host
-        container.translatesAutoresizingMaskIntoConstraints = false
-        host.addSubview(container)
-        NSLayoutConstraint.activate([
-            container.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-            container.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-            container.topAnchor.constraint(equalTo: host.topAnchor),
-            container.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-        ])
+        // contentView 直接用 DropZoneView：
+        // 拖放接收必须在窗口的直接内容视图上才可靠（见 DropZoneView 注释）。
+        // 窗口宽度问题由 contentMinSize/MaxSize 显式给出，不靠套 wrapper 解决。
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 22
+        container.layer?.masksToBounds = true
+        w.contentView = container
+        w.contentMinSize = NSSize(width: 900, height: 600)
+        w.contentMaxSize = NSSize(width: 10000, height: 10000)
 
         w.delegate = self
         window = w
@@ -2221,10 +2232,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         case .allDisplays:
             displaySelection = .allDisplays
             targetDisplayID = ""
+            refreshLibraryIfNeeded()
             refreshControls()
         case .display(let id):
             displaySelection = .display(id)
             targetDisplayID = id
+            refreshLibraryIfNeeded()
             refreshControls()
         case .preset(let id):
             presetSelection = .preset(id)
@@ -2232,6 +2245,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         case .library(let cat):
             librarySelection = .library(cat)
             libraryFilter = cat
+            // 切分类时先检查磁盘有没有变化（比如刚在访达里增删过文件）
+            refreshLibraryIfNeeded()
             reloadLibrary()
             refreshControls()
         }
@@ -2875,6 +2890,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 卡片右键菜单
+    /// 右键左栏的分类文件夹。
+    private func makeCategoryMenu(category: String?, view: NSView) -> NSMenu? {
+        guard let cat = category else { return nil }
+        let menu = NSMenu()
+
+        let reveal = NSMenuItem(title: L10n.t("category.revealInFinder"),
+                                action: #selector(revealCategoryInFinder(_:)),
+                                keyEquivalent: "")
+        reveal.target = self
+        reveal.representedObject = cat
+        menu.addItem(reveal)
+
+        menu.addItem(.separator())
+
+        let trash = NSMenuItem(title: L10n.t("category.moveToTrash"),
+                               action: #selector(trashCategory(_:)),
+                               keyEquivalent: "")
+        trash.target = self
+        trash.representedObject = cat
+        menu.addItem(trash)
+
+        return menu
+    }
+
+    /// 在访达中显示该分类文件夹
+    @objc private func revealCategoryInFinder(_ sender: NSMenuItem) {
+        guard let cat = sender.representedObject as? String else { return }
+        let dir = Settings.wallpaperFolder.appendingPathComponent(cat, isDirectory: true)
+        NSWorkspace.shared.activateFileViewerSelecting([dir])
+    }
+
+    /// 把整个分类文件夹移到废纸篓（可恢复），并把它从库里清掉
+    @objc private func trashCategory(_ sender: NSMenuItem) {
+        guard let cat = sender.representedObject as? String else { return }
+        let dir = Settings.wallpaperFolder.appendingPathComponent(cat, isDirectory: true)
+
+        // 二次确认：整个文件夹都会进废纸篓，不是小操作
+        let alert = NSAlert()
+        alert.messageText = L10n.t("category.trashTitle")
+        alert.informativeText = L10n.t("category.trashBody", cat)
+        alert.addButton(withTitle: L10n.t("common.delete"))
+        alert.addButton(withTitle: L10n.t("common.cancel"))
+        alert.alertStyle = .warning
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let fm = FileManager.default
+        if fm.fileExists(atPath: dir.path) {
+            do {
+                try fm.trashItem(at: dir, resultingItemURL: nil)
+            } catch {
+                flashStatus(L10n.t("category.trashFailed", cat))
+                return
+            }
+        }
+
+        // 若当前正看着这个分类，回到「全部」
+        if case .library(let curr) = librarySelection, curr == cat {
+            librarySelection = .library(nil)
+            libraryFilter = nil
+        }
+        // 该分类下的素材从库里移除（文件已随文件夹进废纸篓）
+        StateStore.shared.update { st in
+            st.library.removeAll { $0.category == cat }
+        }
+        cachedCategories = nil          // 目录结构变了
+        scanWallpaperFolder()
+        reloadLibrary()
+        flashStatus(L10n.t("category.trashed", cat))
+    }
+
     /// 中栏空白处的右键菜单：库级操作。
     private func makeBlankMenu(view: NSView) -> NSMenu? {
         let menu = NSMenu()
@@ -3047,6 +3132,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         topSubtitle?.stringValue = L10n.t("header.count", count)
     }
 
+    /// 刷新左栏底部的信息框：当前作用范围、分辨率、那块屏正在用的壁纸。
+    ///
+    /// 它是「显示器状态」，不是「素材详情」，所以与是否选中素材无关。
+    private func refreshSidebarInfo() {
+        let scopeName = targetDisplayID.isEmpty
+            ? L10n.t("common.allDisplaysCount", screens.count)
+            : (screens.first { screenID($0) == targetDisplayID }.map { screenTitle($0) }
+               ?? L10n.t("common.unknownDisplay"))
+
+        guard let s = targetScreens.first ?? NSScreen.screens.first else {
+            sidebar.setInfo(title: scopeName, subtitle: "")
+            return
+        }
+        let scale = s.backingScaleFactor
+        let w = Int(s.frame.width * scale)
+        let h = Int(s.frame.height * scale)
+        let title = "\(scopeName)  \(w)×\(h)"
+
+        if let using = state.assignment[screenID(s)] {
+            let usingName = state.library.first { $0.path == using }?.displayName
+                ?? (using as NSString).lastPathComponent
+            sidebar.setInfo(title: title, subtitle: L10n.t("detail.using", usingName))
+        } else {
+            sidebar.setInfo(title: title, subtitle: L10n.t("detail.notUsing"))
+        }
+    }
+
     private func refreshControls() {
         updateHeaderTitle()
         loadPresetButton.isHidden = true
@@ -3054,7 +3166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         guard let item = selectedItem else {
             scopeLabel.stringValue = L10n.t("win.scope.none")
 
-            sidebar.setInfo(title: L10n.t("win.scope.none"), subtitle: "")
+            // 信息框显示的是「当前显示器」的状态，与有没有选中素材无关
+            refreshSidebarInfo()
             paneTitle.stringValue = ""
             previewPane.show(path: nil, fallbackText: L10n.t("preview.noSelection"))
             updateFileInfo(for: nil)
@@ -3076,24 +3189,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             : (screens.first { screenID($0) == targetDisplayID }.map { screenTitle($0) } ?? L10n.t("common.unknownDisplay"))
         scopeLabel.stringValue = L10n.t("win.scope", scopeName, item.displayName)
 
-        // 右栏顶部：显示器标题（带分辨率）+ 该屏正在用的素材
-        if let s = targetScreens.first ?? NSScreen.screens.first {
-            let scale = s.backingScaleFactor
-            let w = Int(s.frame.width * scale)
-            let h = Int(s.frame.height * scale)
-            sidebar.setInfo(title: "\(scopeName)  \(w)×\(h)", subtitle: "")
-            // 这块屏当前用的是什么（可能和选中的素材不同）
-            let id = screenID(s)
-            if let using = state.assignment[id] {
-                let usingName = state.library.first { $0.path == using }?.displayName
-                    ?? (using as NSString).lastPathComponent
-                sidebar.setInfo(title: "\(scopeName)  \(w)×\(h)", subtitle: L10n.t("detail.using", usingName))
-            } else {
-                sidebar.setInfo(title: "\(scopeName)  \(w)×\(h)", subtitle: L10n.t("detail.notUsing"))
-            }
-        } else {
-            sidebar.setInfo(title: scopeName, subtitle: item.displayName)
-        }
+        // 左栏信息框：显示器状态（与选中哪一个素材无关）
+        refreshSidebarInfo()
         // 预览图上方的文件名标题
         paneTitle.stringValue = item.displayName
         // 右栏大图预览：此前只更新了标题与副标题，从未调用 previewPane.show，
@@ -3434,6 +3531,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 子文件夹名即分类：根目录下的文件 category 为空，
     /// 子文件夹 a/ 下的文件 category 为 "a"。只扫一层子目录，
     /// 不做无限递归（更深的层级对壁纸库没有意义，也容易误收系统文件）。
+    /// 文件夹「指纹」：目录自身与其直接子项的修改时间。
+    /// 用于判断自上次扫描以来磁盘是否真的变了 —— 切分类、切显示器这类
+    /// 高频操作不能每次都全量扫盘并重建库。
+    private func folderFingerprint() -> String {
+        let fm = FileManager.default
+        let folder = Settings.wallpaperFolder
+        var parts: [String] = []
+
+        func stamp(_ url: URL) -> String {
+            let attrs = try? fm.attributesOfItem(atPath: url.path)
+            let m = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+            return String(format: "%020.6f", m)
+        }
+
+        parts.append(stamp(folder))
+        if let names = try? fm.contentsOfDirectory(atPath: folder.path) {
+            for n in names.sorted() where !n.hasPrefix(".") {
+                let full = folder.appendingPathComponent(n)
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: full.path, isDirectory: &isDir) else { continue }
+                parts.append(n + stamp(full))
+            }
+        }
+        return parts.joined(separator: "|")
+    }
+
+    /// 只在磁盘内容真的变了时才重扫并刷新图库。
+    /// 返回是否发生了重扫。
+    @discardableResult
+    private func refreshLibraryIfNeeded() -> Bool {
+        let fp = folderFingerprint()
+        guard fp != lastFolderFingerprint else { return false }
+        lastFolderFingerprint = fp
+        scanWallpaperFolder()
+        reloadLibrary()
+        return true
+    }
+
     private func scanWallpaperFolder() {
         let fm = FileManager.default
         let folder = Settings.wallpaperFolder

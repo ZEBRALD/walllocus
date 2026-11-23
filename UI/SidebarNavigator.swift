@@ -169,6 +169,8 @@ final class SidebarNavigator: NSView {
     var onSavePreset: (() -> Void)?
     /// 预设右键菜单（传入 preset id）
     var onPresetMenu: ((String, NSView) -> NSMenu?)?
+    /// 分类行的右键菜单。参数为分类名（nil 表示「全部」）。
+    var onCategoryMenu: ((String?, NSView) -> NSMenu?)?
     /// 点「新建分类」
     var onNewCategory: (() -> Void)?
     /// 素材被拖到某个显示器行：应用到那块屏。
@@ -373,6 +375,10 @@ final class SidebarNavigator: NSView {
                   let node = self.outline.item(atRow: row) as? Node else { return nil }
             if case .preset(let p) = node.kind {
                 return self.onPresetMenu?(p.id, view)
+            }
+            if case .library(let cat) = node.kind, cat != nil {
+                // 「全部」不对应任何文件夹，不给菜单
+                return self.onCategoryMenu?(cat, view)
             }
             return nil
         }

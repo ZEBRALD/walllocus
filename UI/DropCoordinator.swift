@@ -54,8 +54,12 @@ final class DropCoordinator {
             overlays.append(ov)
         }
 
-        // 先不显示：要等光标拖出应用窗口才铺提示，
-        // 否则铺满整屏的 overlay 会抢走左栏/图库的拖拽事件。
+        // 立即显示三块屏的提示卡片。
+        // overlay 只有卡片大小（不铺满屏），所以不会挡住左栏/图库的拖拽事件，
+        // 不需要再等「光标离开应用窗口」。
+        for ov in overlays {
+            ov.fadeIn(animated: false)
+        }
         startPolling()
     }
 
@@ -84,9 +88,12 @@ final class DropCoordinator {
         for ov in overlays where ov.isVisible { ov.fadeOut() }
     }
 
-    /// 确保 overlay 已显示（光标离开应用后）
+    /// 确保所有屏幕的提示卡片都已显示。
+    /// 卡片始终显示的语义：一开始就铺出来，之后只切换高亮。
     private func ensureVisible() {
-        // 所有屏幕的提示卡片始终显示，只切换高亮
+        for ov in overlays where !ov.isVisible {
+            ov.fadeIn(animated: false)
+        }
     }
 
     /// 主窗口的屏幕区域（用来判断光标是否还在应用内）

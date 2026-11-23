@@ -82,6 +82,14 @@ final class DropZoneView: NSView {
     /// 用户松手后回调可用的素材路径
     var onDrop: (([String]) -> Void)?
 
+    /// 覆盖全窗口的拖放接收层。
+    ///
+    /// 绿加号由系统按「光标下的拖放接收者」绘制。卡在缩略图、预览图这类
+    /// 子视图上时，系统问的是它们（不接收文件），于是加号时有时无。
+    /// hitTest 拦不住这一点 —— AppKit 找接收者不走 hitTest。
+    /// 可靠做法是在拖拽期间把这一层提到最上层，让所有位置都命中它。
+    private let dragSink = DragSinkView()
+
     /// 拖拽提示浮层：外层不响应鼠标事件（否则会吞掉图库的滚动）
     private let overlay = PassthroughView()
     /// 毛玻璃：把底层素材库糊掉，让上层提示跳出来
@@ -99,6 +107,10 @@ final class DropZoneView: NSView {
     /// 延时隐藏计时器：拖拽经过窗口边缘时 entered/exited 会反复触发，
     /// 每次都立刻隐藏会让浮层闪个不停。
     private var hideTimer: Timer?
+    /// 拖拽中「是否真的离开了窗口」的轮询
+    private var exitWatch: Timer?
+    /// 探测「系统是否正在拖拽文件」的轮询
+    private var dragWatch: Timer?
     /// 每次拖入的候选数量，用于在 draggingUpdated 里刷新文案
     private var supportedCount = 0
     private var rejectedCount = 0
@@ -117,6 +129,18 @@ final class DropZoneView: NSView {
         wantsLayer = true
         // 只接收文件 URL；字符串/文本之类的拖入不会触发
         registerForDraggedTypes([.fileURL])
+
+        // 拖放接收层：铺满窗口，拖拽期间提到最上层
+        dragSink.handler = self
+        dragSink.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dragSink)
+        NSLayoutConstraint.activate([
+            dragSink.leadingAnchor.constraint(equalTo: leadingAnchor),
+            dragSink.trailingAnchor.constraint(equalTo: trailingAnchor),
+            dragSink.topAnchor.constraint(equalTo: topAnchor),
+            dragSink.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        startDragWatch()
 
         overlay.wantsLayer = true
         overlay.layer?.cornerRadius = 10
@@ -267,36 +291,76 @@ final class DropZoneView: NSView {
             detailLabel.stringValue = L10n.t("drop.supportedTypes")
         }
 
-        if !isActive {
-            isActive = true
-            overlay.isHidden = false
-            // 目标值先落地，再做淡入；否则动画未推进时视图仍是透明的
-            overlay.alphaValue = 1
-            overlay.layer?.removeAllAnimations()
-            let fade = CABasicAnimation(keyPath: "opacity")
-            fade.fromValue = 0
-            fade.toValue = 1
-            fade.duration = 0.12
-            overlay.layer?.add(fade, forKey: "fadeIn")
-        } else {
-            // 已经显示，内容变化时无需重复动画
-            overlay.alphaValue = 1
-        }
+        // 不做淡入动画：拖拽期间 showOverlay 会被反复调用，
+        // 每次从 0 淡入就是「闪一下」的来源。直接切到不透明。
+        isActive = true
+        overlay.layer?.removeAllAnimations()
+        overlay.isHidden = false
+        overlay.alphaValue = 1
+        startExitWatch()
     }
 
     private func hideOverlay() {
         guard isActive else { return }
         isActive = false
-        // 不能立刻 isHidden：视图会瞬间消失，淡出动画根本没机会播，
-        // 看起来就是「闪一下」。先做透明度动画，播完再真正隐藏。
+        stopExitWatch()
+        // 与显示一样不做动画：动画收尾会与下一次显示竞争，
+        // 表现为浮层反复显隐。直接瞬切最稳。
         overlay.layer?.removeAllAnimations()
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.15
-            overlay.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            guard let self, !self.isActive else { return }
-            self.overlay.isHidden = true
-        })
+        overlay.alphaValue = 0
+        overlay.isHidden = true
+    }
+
+    /// 探测系统是否正在拖拽文件，据此开关接收层。
+    ///
+    /// 拖放开始没有本地通知可监听（draggingEntered 可能被别的子视图吃掉），
+    /// 所以用剪贴板探测：NSDragPboard 上有文件 URL 就说明文件拖拽在途。
+    private func startDragWatch() {
+        dragWatch?.invalidate()
+        var consecutiveMisses = 0
+        let t = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            let dragging = NSPasteboard(name: .drag).availableType(from: [.fileURL]) != nil
+
+            if dragging {
+                consecutiveMisses = 0
+            } else {
+                // 拖拽期间粘贴板偶有瞬时读空：要连续多次读不到才算真的结束，
+                // 否则接收层会闪断，绿加号随之消失（伴随焦点跳变）。
+                consecutiveMisses += 1
+                guard consecutiveMisses >= 4 else { return }
+            }
+
+            guard self.dragSink.isEnabled != dragging else { return }
+            self.dragSink.isEnabled = dragging
+            if dragging {
+                self.addSubview(self.dragSink, positioned: .above, relativeTo: nil)
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        dragWatch = t
+    }
+
+    /// 轮询兜底：拖拽期间若鼠标真的移出窗口，就收起浮层。
+    ///
+    /// 不能靠 draggingExited —— 它会在光标移入任何子视图时也触发，
+    /// 导致「压在缩略图上没提示」。这里用全局鼠标位置做权威判断。
+    private func startExitWatch() {
+        exitWatch?.invalidate()
+        let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            guard let self, let win = self.window, self.isActive else { return }
+            let p = NSEvent.mouseLocation
+            if !NSMouseInRect(p, win.frame, false) {
+                self.hideOverlay()
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        exitWatch = t
+    }
+
+    private func stopExitWatch() {
+        exitWatch?.invalidate()
+        exitWatch = nil
     }
 
     /// 延时隐藏：吃掉 entered/exited 的抖动
@@ -377,9 +441,17 @@ final class DropZoneView: NSView {
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
-        // 拖拽掠过窗口边缘时会反复 entered/exited，
-        // 延时隐藏能吃掉抖动，避免浮层闪烁甚至错过放置
-        scheduleHideOverlay()
+        // 刻意不在这里隐藏浮层。
+        //
+        // AppKit 在光标移入任何「参与命中测试的子视图」时都会发 exited
+        // （缩略图卡片、右栏预览图、按钮等），但它们明明还在窗口内 ——
+        // 按 exited 隐藏就会出现「压在这些视图上没提示、在缝隙里有提示」
+        // 这种断续表现。
+        //
+        // 浮层的收起交给两个确定的时机：
+        //   · performDragOperation / concludeDragOperation（放置完成）
+        //   · 鼠标抬起的兜底监听（拖放被取消/失败）
+        // 拖拽中不断重复 showOverlay 的成本可以忽略。
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
@@ -408,3 +480,66 @@ final class DropZoneView: NSView {
         hideOverlay()
     }
 }
+
+/// 覆盖整个窗口的拖放接收层，只在拖拽期间生效。
+///
+/// AppKit 把拖放事件送给「光标下的视图链上第一个注册了该类型的视图」，
+/// 而不是送给我们希望的视图。窗口里铺满了会参与命中的子视图，
+/// 光标压在它们上面时拖放就落到它们身上 —— 绿加号也因此时有时无。
+///
+/// 这一层平时 hitTest 返回 nil（完全不挡下层鼠标操作），
+/// 拖拽期间被提到最上层并且参与命中，保证任何位置都落到它这里。
+final class DragSinkView: NSView {
+
+    weak var handler: DropZoneView?
+
+    /// 是否处于「接受拖放」状态
+    var isEnabled = false {
+        didSet { if oldValue != isEnabled { needsLayout = true } }
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        common()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        common()
+    }
+
+    private func common() {
+        registerForDraggedTypes([.fileURL])
+    }
+
+    override var acceptsFirstResponder: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        isEnabled ? self : nil
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        handler?.draggingEntered(sender) ?? []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        handler?.draggingUpdated(sender) ?? []
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        handler?.draggingExited(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        handler?.prepareForDragOperation(sender) ?? false
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        handler?.performDragOperation(sender) ?? false
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        handler?.concludeDragOperation(sender)
+    }
+}
+
