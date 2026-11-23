@@ -355,6 +355,12 @@ final class DropZoneView: NSView {
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 库内素材（自有类型）一律不当作导入：
+        // 这里也必须判断，否则 entered 返回 [] 之后 updated 仍会走 classify，
+        // 把「导入」浮层闪一下又收掉。
+        if sender.draggingPasteboard.availableType(from: [WallpaperDrag.type]) != nil {
+            return []
+        }
         // 每次更新都取消待隐藏，拖拽在窗口内持续期间浮层不会消失
         cancelScheduledHide()
         // 拖拽过程中可能从别的窗口继续加文件，数量会变
@@ -377,12 +383,20 @@ final class DropZoneView: NSView {
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        !classify(sender).ok.isEmpty
+        // 库内素材不是导入，直接拒绝
+        if sender.draggingPasteboard.availableType(from: [WallpaperDrag.type]) != nil {
+            return false
+        }
+        return !classify(sender).ok.isEmpty
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         cancelScheduledHide()
         hideOverlay()
+        // 库内素材不导入
+        if sender.draggingPasteboard.availableType(from: [WallpaperDrag.type]) != nil {
+            return false
+        }
         let (ok, _) = classify(sender)
         guard !ok.isEmpty else { return false }
         onDrop?(ok)

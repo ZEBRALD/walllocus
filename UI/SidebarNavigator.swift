@@ -70,7 +70,13 @@ final class SoftRowView: NSTableRowView {
 
     /// 选中时把行内文字染成强调色（照片 App 的做法），取消选中恢复白色。
     override var isSelected: Bool {
-        didSet { if isSelected != oldValue { applyTextColor() } }
+        didSet {
+            guard isSelected != oldValue else { return }
+            applyTextColor()
+            // 必须主动重绘：底块画在 drawBackground 里，
+            // 不标脏的话取消选中后旧灰块会留在屏幕上（表现为多行同时高亮）。
+            needsDisplay = true
+        }
     }
 
     override func layout() {
@@ -186,6 +192,8 @@ final class SidebarNavigator: NSView {
     private var categories: [String] = []
     /// 每个分类的封面图路径（取该分类第一张素材），用于渲染缩略图方块
     private var categoryCovers: [String: String] = [:]
+    /// 上一次 reload 的结构签名：相同就跳过 reloadData，避免切分类时缩略图闪烁
+    private var lastStructureSignature = ""
     /// 面板顶部的大标题与副标题（原在顶栏，现移入侧栏内部）
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
@@ -505,21 +513,39 @@ final class SidebarNavigator: NSView {
         self.displayStatuses = statuses
         self.aggregateStatus = aggregate
 
-        // 壁纸库：全部 + 各分类 + 新建
-        libraryGroup.children = [Node(.library(nil))]
-        libraryGroup.children += categories.map { Node(.library($0)) }
-        libraryGroup.children.append(Node(.newCategory))
+        // 结构签名：分类名 + 封面 + 预设 + 显示器。
+        // 完全没变就跳过 reloadData —— 它会重建所有 cell，
+        // 缩略图即使走缓存也要重绘一帧，切分类时看着就是「闪」。
+        // 必须包含分组顺序：它决定了 roots 的排列与行号映射，
+        // 漏掉会导致「跳过了 reloadData 但行号已变」，行与数据错位，
+        // 表现为多行同时高亮。
+        let signature = [
+            Settings.groupOrder.joined(separator: ","),
+            categories.joined(separator: "|"),
+            categories.map { (c: String) -> String in categoryCovers[c] ?? "" }.joined(separator: "|"),
+            presets.map { (p: WallpaperPreset) -> String in p.id + ":" + p.name }.joined(separator: "|"),
+            screens.map { screenIDOf($0) }.joined(separator: "|"),
+        ].joined(separator: "#")
 
-        presetGroup.children = presets.map { Node(.preset($0)) }
-        presetGroup.children.append(Node(.savePreset))
+        if signature != lastStructureSignature {
+            lastStructureSignature = signature
 
-        var displayNodes: [Node] = [Node(.allDisplays)]
-        for s in screens {
-            displayNodes.append(Node(.display(screenIDOf(s), screenTitleOf(s))))
+            // 壁纸库：全部 + 各分类 + 新建
+            libraryGroup.children = [Node(.library(nil))]
+            libraryGroup.children += categories.map { Node(.library($0)) }
+            libraryGroup.children.append(Node(.newCategory))
+
+            presetGroup.children = presets.map { Node(.preset($0)) }
+            presetGroup.children.append(Node(.savePreset))
+
+            var displayNodes: [Node] = [Node(.allDisplays)]
+            for s in screens {
+                displayNodes.append(Node(.display(screenIDOf(s), screenTitleOf(s))))
+            }
+            displayGroup.children = displayNodes
+
+            outline.reloadData()
         }
-        displayGroup.children = displayNodes
-
-        outline.reloadData()
         // 分组默认展开
         for root in roots { outline.expandItem(root) }
         // 让 NSScrollView 重新计算可滚区域：
@@ -548,12 +574,13 @@ final class SidebarNavigator: NSView {
 
     /// 把三组记录状态同步到 outline 的多选上
     private func syncOutlineSelection() {
+        // 按行号遍历匹配，而不是 row(forItem:)。
+        // 后者依赖对象身份，而 reload 会重建 Node 对象；
+        // 一旦对象身份对不上，就可能把多个行都当成选中。
         var rows = IndexSet()
-        for sel in [selectedDisplay, selectedLibrary, selectedPreset].compactMap({ $0 }) {
-            if let node = findNode(for: sel) {
-                let r = outline.row(forItem: node)
-                if r >= 0 { rows.insert(r) }
-            }
+        for r in 0..<outline.numberOfRows {
+            guard let node = outline.item(atRow: r) as? Node else { continue }
+            if isRowSelectedByState(node) { rows.insert(r) }
         }
         // 已经是这个集合就什么都不做。
         // selectRowIndexes(byExtendingSelection: false) 会「先全部清空再重新选中」，
@@ -738,6 +765,22 @@ final class SidebarNavigator: NSView {
         syncOutlineSelection()
     }
 
+    /// 该节点是否对应三组选中状态中的某一个
+    private func isRowSelectedByState(_ node: Node) -> Bool {
+        switch node.kind {
+        case .allDisplays:
+            return selectedDisplay == .allDisplays
+        case .display(let id, _):
+            return selectedDisplay == .display(id)
+        case .library(let cat):
+            return selectedLibrary == .library(cat)
+        case .preset(let p):
+            return selectedPreset == .preset(p.id)
+        default:
+            return false
+        }
+    }
+
     /// 该节点当前是否已被记入某一组的选中状态
     private func isRecordedSelected(_ node: Node) -> Bool {
         switch node.kind {
@@ -898,9 +941,18 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         box.addSubview(img)
 
         if let cover = coverPath {
-            ThumbnailStore.shared.thumbnail(for: cover) { [weak img] cg in
-                guard let img, let cg else { return }
-                img.image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            // 缓存命中就同步设图：异步回调会晚一帧，
+            // 而 reload 每次都重建 cell —— 先空白后填图就是「闪烁」。
+            if let hit = ThumbnailStore.shared.cachedImage(for: cover) {
+                img.image = NSImage(cgImage: hit,
+                                    size: NSSize(width: hit.width, height: hit.height))
+            } else {
+                // 未命中才走异步解码，回来后确认这条 cell 还代表同一个封面
+                ThumbnailStore.shared.thumbnail(for: cover) { [weak img] cg in
+                    guard let img, let cg else { return }
+                    img.image = NSImage(cgImage: cg,
+                                        size: NSSize(width: cg.width, height: cg.height))
+                }
             }
         } else {
             // 空分类：画一个居中的图标，不铺满

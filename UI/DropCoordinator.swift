@@ -24,8 +24,6 @@ final class DropCoordinator {
     private var timer: Timer?
     private var draggedPath: String?
     private var targetedScreen: NSScreen?
-    /// 会话开始时的模式快照（拖拽中途改设置不生效）
-    private var sessionMode: ScreenDropOverlayMode = .all
 
     private init() {}
 
@@ -33,12 +31,11 @@ final class DropCoordinator {
 
     // MARK: - 会话控制
 
-    func begin(path: String, mode: ScreenDropOverlayMode) {
+    func begin(path: String) {
         // 防御：上一次会话没清干净就重建
         if isActive { end() }
 
         draggedPath = path
-        sessionMode = mode
         targetedScreen = nil
 
         for screen in NSScreen.screens {
@@ -89,12 +86,7 @@ final class DropCoordinator {
 
     /// 确保 overlay 已显示（光标离开应用后）
     private func ensureVisible() {
-        switch sessionMode {
-        case .all:
-            for ov in overlays where !ov.isVisible { ov.fadeIn() }
-        case .targeted:
-            break        // 由 poll 里的命中逻辑逐个显示
-        }
+        // 所有屏幕的提示卡片始终显示，只切换高亮
     }
 
     /// 主窗口的屏幕区域（用来判断光标是否还在应用内）
@@ -144,18 +136,7 @@ final class DropCoordinator {
                          resolution: res,
                          targeted: targeted)
 
-            switch sessionMode {
-            case .all:
-                break                      // 一直在屏上，只切换高亮
-            case .targeted:
-                // 只要光标进了这块屏就显示它的卡片，
-                // 否则用户不知道卡片在哪、也就无从瞄准。
-                if ov.screenRef === screenHit {
-                    if !ov.isVisible { ov.fadeIn() }
-                } else if ov.isVisible {
-                    ov.fadeOut()
-                }
-            }
+            // 所有屏幕的提示卡片始终显示，只切换高亮
         }
     }
 }

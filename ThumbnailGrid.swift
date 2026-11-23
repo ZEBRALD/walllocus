@@ -98,10 +98,11 @@ final class CardView: NSView {
         let session = beginDraggingSession(with: [item], event: event, source: self)
         session.animatesToStartingPositionsOnCancelOrFail = true
 
-        // 拖出窗口才显示屏幕提示方块。
-        // 在窗口内拖动是「库内操作」，铺满全屏的提示会干扰。
-        DropCoordinator.shared.begin(path: payload.path,
-                                     mode: Settings.screenDropOverlayMode)
+        // 只有开启「拖拽应用壁纸」才显示屏幕提示卡片。
+        // 关掉时拖拽只用于把文件复制出去。
+        if Settings.dragToApplyEnabled {
+            DropCoordinator.shared.begin(path: payload.path)
+        }
     }
 }
 

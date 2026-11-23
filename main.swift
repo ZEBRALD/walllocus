@@ -487,18 +487,6 @@ final class WallpaperView: NSView {
 
 // MARK: - 设置项（UserDefaults 持久化）
 
-/// 拖拽壁纸到屏幕时，覆盖层提示的显示方式。
-enum ScreenDropOverlayMode: String {
-    /// 一开始就把所有屏幕的提示方块都显示出来
-    case all
-    /// 只在光标进入某块屏时才显示那一个
-    case targeted
-
-    var titleKey: String {
-        self == .all ? "setting.dropOverlay.all" : "setting.dropOverlay.targeted"
-    }
-}
-
 enum Settings {
     private static let d = UserDefaults.standard
 
@@ -549,16 +537,15 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: "librarySortAscending") }
     }
 
-    /// 拖拽到屏幕时覆盖层的显示方式（默认全部显示）
-    static var screenDropOverlayMode: ScreenDropOverlayMode {
+    /// 是否启用「拖拽壁纸到屏幕即应用」（默认开启）。
+    /// 关闭后拖拽只用于把文件复制出去，屏幕上不再出现提示卡片。
+    static var dragToApplyEnabled: Bool {
         get {
-            guard let raw = UserDefaults.standard.string(forKey: "screenDropOverlayMode"),
-                  let m = ScreenDropOverlayMode(rawValue: raw) else { return .all }
-            return m
+            let d = UserDefaults.standard
+            if d.object(forKey: "dragToApplyEnabled") == nil { return true }
+            return d.bool(forKey: "dragToApplyEnabled")
         }
-        set {
-            UserDefaults.standard.set(newValue.rawValue, forKey: "screenDropOverlayMode")
-        }
+        set { UserDefaults.standard.set(newValue, forKey: "dragToApplyEnabled") }
     }
 
     /// 网格里是否显示图片文件名（默认显示）
@@ -1075,6 +1062,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let targetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let libraryPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let thumbnailGrid = ThumbnailGrid(frame: .zero)
+    /// 右栏视图（用于判断点击是否落在右栏 —— 右栏有「应用预设」操作，
+    /// 点它不该清掉预设的选中）
+    private weak var detailPaneView: NSView?
     /// 素材名称编辑框（选中后可改名，解决 UUID 文件名认不出的问题）
     private let nameField = NSTextField(string: "")
     /// 「恢复文件名」按钮：仅在当前素材有别名时可用
@@ -1327,6 +1317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         let middle = buildLibraryPane()
         let right = buildDetailPane()
+        detailPaneView = right
 
         // 竖分隔线
         // 竖分隔线：自绘 1pt 单线（NSBox.separator 当竖线用会画成双线）
@@ -2528,6 +2519,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         showNames.target = self
         showNames.state = Settings.showGridFileNames ? .on : .off
         librarySub.addItem(showNames)
+
+        librarySub.addItem(.separator())
+
+        // ── 拖拽应用壁纸（开关） ──
+        let dragApply = NSMenuItem(title: L10n.t("setting.dragToApply"),
+                                   action: #selector(toggleDragToApply),
+                                   keyEquivalent: "")
+        dragApply.target = self
+        dragApply.state = Settings.dragToApplyEnabled ? .on : .off
+        librarySub.addItem(dragApply)
 
         librarySub.addItem(.separator())
 
@@ -4205,33 +4206,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         sub.addItem(.separator())
 
-        // 拖拽到屏幕时的提示方式（单选项）
-        let dropTitle = NSMenuItem(title: L10n.t("setting.dropOverlay"), action: nil, keyEquivalent: "")
-        dropTitle.isEnabled = false
-        sub.addItem(dropTitle)
-
-        let current = Settings.screenDropOverlayMode
-        for mode in [ScreenDropOverlayMode.all, .targeted] {
-            let it = NSMenuItem(title: L10n.t(mode.titleKey),
-                                action: #selector(setDropOverlayMode(_:)),
-                                keyEquivalent: "")
-            it.target = self
-            it.representedObject = mode.rawValue
-            it.indentationLevel = 1
-            it.state = (mode == current) ? .on : .off
-            sub.addItem(it)
-        }
+        // 拖拽应用壁纸（开关）
+        let dragApply = NSMenuItem(title: L10n.t("setting.dragToApply"),
+                                   action: #selector(toggleDragToApply),
+                                   keyEquivalent: "")
+        dragApply.target = self
+        dragApply.state = Settings.dragToApplyEnabled ? .on : .off
+        sub.addItem(dragApply)
     }
 
-    /// 切换拖拽提示的显示方式
-    @objc private func setDropOverlayMode(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String,
-              let mode = ScreenDropOverlayMode(rawValue: raw) else { return }
-        Settings.screenDropOverlayMode = mode
-        // 菜单每次打开都重建，这里只需刷新当前显示的勾选
-        for it in sender.menu?.items ?? [] where it.action == #selector(setDropOverlayMode(_:)) {
-            it.state = (it.representedObject as? String) == mode.rawValue ? .on : .off
-        }
+    /// 开/关「拖拽壁纸到屏幕即应用」
+    @objc private func toggleDragToApply() {
+        Settings.dragToApplyEnabled.toggle()
     }
 
     // MARK: 菜单栏图标（关窗后常驻）
@@ -4460,14 +4446,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 实现要点：用本地事件监听而非逐个视图加 mouseDown，
     /// 这样按钮、侧栏、缩略图、空白区全都覆盖，且不影响控件自身的点击行为。
     /// 点击位置是否落在左栏内
-    private func clickIsInsideSidebar(_ event: NSEvent, window w: NSWindow) -> Bool {
+    /// 这次点击是否需要清除预设选中。
+    ///
+    /// 只有「点右栏」时保留 —— 右栏承载「应用预设」等操作，
+    /// 清除选中会让用户没法继续操作刚选中的预设。
+    private func clickShouldClearPreset(_ event: NSEvent, window w: NSWindow) -> Bool {
         guard let hit = w.contentView?.hitTest(event.locationInWindow) else { return false }
-        var v: NSView? = hit
-        while let cur = v {
-            if cur === sidebar { return true }
-            v = cur.superview
+
+        // 命中视图是否位于某个容器内
+        func isInside(_ target: NSView?) -> Bool {
+            guard let target else { return false }
+            var v: NSView? = hit
+            while let cur = v {
+                if cur === target { return true }
+                v = cur.superview
+            }
+            return false
         }
-        return false
+
+        if isInside(detailPaneView) { return false }   // 右栏：保留
+        if isInside(sidebar) {
+            // 点在左栏内部的预设行上由选中逻辑自己处理，这里不干预；
+            // 点左栏其它位置（分类、显示器、空白）都清除。
+            return true
+        }
+        return true                                     // 中栏及其它：清除
     }
 
     private func installClickToEndEditing() {
@@ -4475,9 +4478,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
             guard let self, let w = self.window else { return event }
 
-            // 点到左栏以外：取消预设选中（预设是「看一眼就收起」的东西）。
-            // 显示器与壁纸库的组合不受影响，它是当前的工作上下文。
-            if !self.clickIsInsideSidebar(event, window: w) {
+            // 预设选中的清除规则：
+            //   点中栏        → 清除（用户转去操作图库）
+            //   点左栏其它处  → 清除（转去选分类/显示器）
+            //   点右栏        → 保留（右栏有「应用预设」等针对预设的操作）
+            if self.clickShouldClearPreset(event, window: w) {
                 self.sidebar.clearPresetSelectionIfNeeded()
             }
 
