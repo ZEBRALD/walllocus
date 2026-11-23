@@ -712,7 +712,157 @@ struct Playlist: Codable, Equatable {
 4. Playlist 播放时中栏是否要高亮「正在播的那条」？（建议：是，加边框或角标）
 
 
-## 十二、全部功能的总实现顺序
+## 十二、配置导出与导入
+
+### 目标
+
+把用户的整套配置打包成一个文件，换电脑时一键恢复「我的习惯」。
+
+**核心价值**：用户调了很久的构图、预设、Playlist、排序习惯，不应因为换机或重装而从零开始。
+
+### 需要导出的内容
+
+当前全部持久化数据分三类：
+
+| 类别 | 存储 | 内容 |
+|---|---|---|
+| **应用状态** | UserDefaults `app.walllocus.state`（JSON） | library、assignment、adjustments、presets、muted、lastSelectedItem、stoppedAssignment |
+| **用户设置** | UserDefaults 分散键 | wallpaperFolder、dragToApplyEnabled、pauseOnBattery、pauseOnFullscreen、showGridFileNames、librarySortKey、librarySortAscending、sidebarGroupOrder、paneSidebarWidth、paneDetailWidth、uiLanguage |
+| **新增（阶段二/三）** | 同上 | playlists、playlistAssignment、playlistCursor、预设 group |
+
+注意 `hasChosenWallpaperFolder` 是首次引导标记，**不应导出**（否则新机不显示引导）。
+
+### 导出格式
+
+用一个自描述的 JSON 文件，扩展名 `.walllocusconfig`：
+
+```json
+{
+  "formatVersion": 1,
+  "appVersion": "1.7.0",
+  "exportedAt": "2026-11-24T01:30:00Z",
+  "settings": {
+    "wallpaperFolder": "/Users/asling/Pictures/WallLocus",
+    "dragToApplyEnabled": true,
+    "pauseOnBattery": false,
+    "pauseOnFullscreen": true,
+    "showGridFileNames": true,
+    "librarySortKey": "date",
+    "librarySortAscending": false,
+    "sidebarGroupOrder": [...],
+    "paneSidebarWidth": 200,
+    "paneDetailWidth": 300,
+    "uiLanguage": "system"
+  },
+  "state": { ...完整 AppState JSON... }
+}
+```
+
+**为什么用 JSON 而非 plist**：可读、可手改、跨平台、便于 diff 和排查。
+
+### 关键设计决策
+
+#### 1. 路径必须转成「相对路径 + 可选重映射」
+
+这是最容易出错的地方。`assignment`、`adjustments`、`presets` 里存的都是**绝对路径**（如 `/Users/asling/Pictures/WallLocus/a.jpg`）。换机后用户名不同、壁纸库位置不同，这些路径全部失效。
+
+**方案**：导出时把路径拆成「相对壁纸库的路径」：
+
+```swift
+// 导出时
+let rel = path.hasPrefix(folder) ? String(path.dropFirst(folder.count)) : path
+// 形如 "Anime/2025/a.jpg"）
+
+// 导入时
+let abs = newFolder + rel
+```
+
+导入时如果壁纸库路径不同，自动用**目标的壁纸库路径**重新拼。这样只要用户在两边都放同一套壁纸，配置就能完整恢复。
+
+**边界**：如果素材不在壁纸库内（用户从外部拖入但没复制），相对路径会失败。此时保留绝对路径作为兜底，并在导入后提示「N 个素材已失效」。
+
+#### 2. 显示器 ID 跨机不同
+
+`assignment` 和 `adjustments` 的 key 是显示器 UUID。换机后 UUID 全变，配置对不上。
+
+**方案**：导出时附带显示器描述信息，导入时按**分辨率 + 名称**尝试匹配：
+
+```json
+"displays": [
+  { "id": "37D8832A-...", "name": "Built-in Retina Display",
+    "width": 1728, "height": 1117, "isMain": true }
+]
+```
+
+导入时按以下顺序匹配：
+1. UUID 相同 → 直接用（同机重装时有效）
+2. 名称 + 分辨率都相同 → 用这个
+3. 只有分辨率相同 → 用这个（可能有多块同名屏，取第一块）
+4. 匹配不上 → 跳过该屏配置，汇总提示
+
+**这个逻辑要单独抽成函数**，因为「热插拔显示器后恢复配置」也有同样需求。
+
+#### 3. 导入策略：合并还是覆盖
+
+**必须让用户选**，因为两种需求都真实存在：
+
+| 策略 | 适用 | 行为 |
+|---|---|---|
+| **覆盖** | 换新机、恢复备份 | 清空现有配置，全量替换 |
+| **合并** | 从旧机拿一部分 | 保留现有，同名预设覆盖，新预设追加，assignment 按显示器合并 |
+
+**建议默认「合并」**（更安全，不会一按就丢光），但**导入前弹出确认**说明将发生什么。
+
+#### 4. 素材文件本身不打包
+
+**不把图片/视频打进配置文件。** 理由：
+- 素材可能几百 MB 到几 GB，打包不现实
+- 用户通常已有自己的素材库
+- 只导出「配置」语义清晰
+
+**但要在导入后给出明确提示**：「已恢复配置，需要 28 个素材；其中 3 个未找到」并列出缺失项。
+
+### UI 落点
+
+菜单：**WallLocus → 导出配置… / 导入配置…**
+
+（放在应用菜单里，与设置项同级，因为这是设置的一部分。）
+
+导入流程：
+
+```
+选文件 → 解析并校验 formatVersion
+       → 显示预览「将恢复：3 个显示器 / 12 个预设 / 2 个 Playlist / 全部设置」
+       → 选择【合并】或【覆盖】
+       → 执行 → 汇总结果「成功恢复 10 项，3 项因素材缺失跳过」
+```
+
+### 边界情况
+
+| 情况 | 处理 |
+|---|---|
+| formatVersion 高于当前 | 拒绝导入，提示「请先更新 App」 |
+| formatVersion 低于当前 | 接受，缺失字段用默认值 |
+| JSON 损坏 | 提示「文件无效」，不修改任何现有配置 |
+| 壁纸库路径不存在 | 让用户先选一个文件夹，再重新映射 |
+| 导入中途失败 | **必须先备份当前配置**，失败可回滚 |
+| 覆盖模式下有未保存修改 | 导入前强制持久化一次 |
+**最重要的安全设计**：导入前**自动备份现有配置**到 `~/Library/Application Support/WallLocus/backup-{时间戳}.json`，失败或用户后悔时可恢复。
+
+### 验收标准
+
+1. 导出 → 得到可读 JSON，含 settings + state + displays
+2. 在另一台机（不同用户名）导入 → 配置恢复，路径正确重映射
+3. 显示器匹配：同机重装（UUID 变但名称分辨率同）→ 正确对应
+4. 合并模式：现有预设保留，新增预设追加
+5. 覆盖模式：现有配置清空后全量替换
+6. 缺失素材 → 汇总提示，不崩溃
+7. 损坏文件 → 明确报错，现有配置不变
+8. 导入失败 → 可从自动备份恢复
+
+---
+
+## 十三、全部功能的总实现顺序
 
 | 顺序 | 功能 | 理由 |
 |---|---|---|
@@ -724,6 +874,7 @@ struct Playlist: Codable, Equatable {
 | 6 | **三栏重排（阶段二）** | 两级目录（改 category 模型） |
 | 7 | **预设文件夹化** | 加 group 字段 + 中栏浏览 |
 | 8 | **Playlist** | 工作量最大：数据结构 + 引擎 + 中栏编辑 |
+| 9 | **配置导出/导入** | 依赖最终数据模型，必须等 Playlist 定稿后再做 |
 
 ### 排序理由
 
@@ -731,12 +882,13 @@ struct Playlist: Codable, Equatable {
 - **4 紧跟**：三栏重排会大幅改变界面，越早做越好，避免后面的功能按旧布局设计再返工
 - **5 README 放在界面稳定后**：否则截图要重拍两次
 - **6-8 押后**：这三项都要改数据模型，一次改一项，每次都能单独验证兼容性
+- **9 最后**：导出要覆盖全部配置项，必须等 Playlist 与预设分组定稿，否则每加一个字段就要改一次导出格式
 
 **关键约束**：阶段一（第 4 项）**绝不碰数据模型**，只做布局与职责重排。这样即使出问题也能快速回退。
 
 ---
 
-## 十三、跨功能的共同风险
+## 十四、跨功能的共同风险
 
 1. **Codable 向前兼容**：`AppState` 和 `Adjustment` 都是手写解码以兼容旧数据。新增字段一律用 `decodeIfPresent` + 默认值，否则老用户升级会丢库。
 2. **L10n 重复 key 会直接崩溃**：批量加文案后必须查重（中英各一次）。
