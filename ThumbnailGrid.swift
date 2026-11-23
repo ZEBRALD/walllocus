@@ -25,10 +25,14 @@ final class CardView: NSView {
     /// 拖拽开始：由外部提供素材路径与拖拽快照。
     /// 返回 nil 表示当前卡片不可拖（例如文件已丢失）。
     var dragPayload: (() -> (path: String, snapshot: NSImage)?)?
+    /// 拖拽开始/结束时通知（用于临时隐藏选中环）
+    var onDragStateChange: ((Bool) -> Void)?
 
     /// 触发拖拽所需的最小位移。低于这个值仍按单击处理。
     private static let dragThreshold: CGFloat = 4
     private var mouseDownPoint: NSPoint?
+    /// 本次拖拽的素材路径（会话结束时要用）
+    private var dragPath: String?
 
     override func menu(for event: NSEvent) -> NSMenu? {
         onRightClick?()
@@ -89,8 +93,15 @@ final class CardView: NSView {
                            width: size.width, height: size.height)
         item.setDraggingFrame(frame, contents: snap)
 
+        dragPath = payload.path
+        onDragStateChange?(true)
         let session = beginDraggingSession(with: [item], event: event, source: self)
         session.animatesToStartingPositionsOnCancelOrFail = true
+
+        // 拖出窗口才显示屏幕提示方块。
+        // 在窗口内拖动是「库内操作」，铺满全屏的提示会干扰。
+        DropCoordinator.shared.begin(path: payload.path,
+                                     mode: Settings.screenDropOverlayMode)
     }
 }
 
@@ -107,6 +118,17 @@ extension CardView: NSDraggingSource {
                          sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         // 拖出应用（甩到屏幕上）用 copy：源素材不动
         context == .outsideApplication ? .copy : .generic
+    }
+
+    /// 拖拽会话结束：无论成功、取消还是失败，都必须收掉提示方块，
+    /// 否则会留下幽灵窗口。
+    func draggingSession(_ session: NSDraggingSession,
+                         endedAt screenPoint: NSPoint,
+                         operation: NSDragOperation) {
+        DropCoordinator.shared.end()
+        dragPath = nil
+        // 结束（含取消）都要恢复选中环
+        onDragStateChange?(false)
     }
 }
 
@@ -232,6 +254,10 @@ final class ThumbnailItem: NSCollectionViewItem {
             guard let snap = self.makeDragSnapshot() else { return nil }
             return (path, snap)
         }
+        v.onDragStateChange = { [weak self] dragging in
+            // 拖拽期间隐藏选中环：拖着的图旁边挂着粗蓝边像残影
+            self?.suppressSelectionRing = dragging
+        }
         v.wantsLayer = true
         // 照片 App 的图片没有卡片边框，只有一个圆角矩形的图片本身。
         // 选中态仍用描边，但平时不画边框。
@@ -302,10 +328,16 @@ final class ThumbnailItem: NSCollectionViewItem {
         // 双击改由 CardView 依据 event.clickCount 自己判断。
     }
 
+    /// 拖拽期间临时隐藏选中环：拖拽时卡片带着粗边框像残影
+    var suppressSelectionRing = false {
+        didSet { updateSelectionRing() }
+    }
+
     private func updateSelectionRing() {
         // 平时无边框，选中时才有强调色描边（与照片一致）
-        view.layer?.borderWidth = isSelected ? 3 : 0
-        view.layer?.borderColor = isSelected
+        let show = isSelected && !suppressSelectionRing
+        view.layer?.borderWidth = show ? 3 : 0
+        view.layer?.borderColor = show
             ? NSColor.controlAccentColor.cgColor
             : NSColor.clear.cgColor
     }

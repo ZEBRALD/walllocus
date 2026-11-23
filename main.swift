@@ -487,6 +487,18 @@ final class WallpaperView: NSView {
 
 // MARK: - 设置项（UserDefaults 持久化）
 
+/// 拖拽壁纸到屏幕时，覆盖层提示的显示方式。
+enum ScreenDropOverlayMode: String {
+    /// 一开始就把所有屏幕的提示方块都显示出来
+    case all
+    /// 只在光标进入某块屏时才显示那一个
+    case targeted
+
+    var titleKey: String {
+        self == .all ? "setting.dropOverlay.all" : "setting.dropOverlay.targeted"
+    }
+}
+
 enum Settings {
     private static let d = UserDefaults.standard
 
@@ -535,6 +547,18 @@ enum Settings {
             return d.bool(forKey: "librarySortAscending")
         }
         set { UserDefaults.standard.set(newValue, forKey: "librarySortAscending") }
+    }
+
+    /// 拖拽到屏幕时覆盖层的显示方式（默认全部显示）
+    static var screenDropOverlayMode: ScreenDropOverlayMode {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: "screenDropOverlayMode"),
+                  let m = ScreenDropOverlayMode(rawValue: raw) else { return .all }
+            return m
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: "screenDropOverlayMode")
+        }
     }
 
     /// 网格里是否显示图片文件名（默认显示）
@@ -1204,6 +1228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         ThumbnailItem.showsFileNames = Settings.showGridFileNames
         reloadLibrary()
         reloadPresets()
+
         WallpaperManager.shared.applyAll()
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
@@ -1289,6 +1314,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 素材拖到左栏的显示器行 → 应用到那块屏
         sidebar.onDropWallpaper = { [weak self] path, displayID in
             self?.applyWallpaper(path: path, displayID: displayID)
+        }
+        // 素材拖到屏幕上的提示卡片 → 应用到那块屏
+        DropCoordinator.shared.onApply = { [weak self] path, screen in
+            self?.applyWallpaper(path: path, displayID: screenID(screen))
         }
         sidebar.onSavePreset = { [weak self] in self?.savePreset() }
         sidebar.onNewCategory = { [weak self] in self?.newCategory() }
@@ -4161,6 +4190,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         statusAutoItem = auto
         sub.addItem(auto)
 
+        sub.addItem(.separator())
+
+        // 拖拽到屏幕时的提示方式（单选项）
+        let dropTitle = NSMenuItem(title: L10n.t("setting.dropOverlay"), action: nil, keyEquivalent: "")
+        dropTitle.isEnabled = false
+        sub.addItem(dropTitle)
+
+        let current = Settings.screenDropOverlayMode
+        for mode in [ScreenDropOverlayMode.all, .targeted] {
+            let it = NSMenuItem(title: L10n.t(mode.titleKey),
+                                action: #selector(setDropOverlayMode(_:)),
+                                keyEquivalent: "")
+            it.target = self
+            it.representedObject = mode.rawValue
+            it.indentationLevel = 1
+            it.state = (mode == current) ? .on : .off
+            sub.addItem(it)
+        }
+    }
+
+    /// 切换拖拽提示的显示方式
+    @objc private func setDropOverlayMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let mode = ScreenDropOverlayMode(rawValue: raw) else { return }
+        Settings.screenDropOverlayMode = mode
+        // 菜单每次打开都重建，这里只需刷新当前显示的勾选
+        for it in sender.menu?.items ?? [] where it.action == #selector(setDropOverlayMode(_:)) {
+            it.state = (it.representedObject as? String) == mode.rawValue ? .on : .off
+        }
     }
 
     // MARK: 菜单栏图标（关窗后常驻）

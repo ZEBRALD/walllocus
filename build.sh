@@ -20,7 +20,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 SOURCES=("$DIR/main.swift" "$DIR/L10n.swift" "$DIR/Rendering.swift" \
          "$DIR/SharedConfig.swift" "$DIR/ThumbnailStore.swift" "$DIR/ThumbnailGrid.swift" "$DIR/DropZoneView.swift" \
          "$DIR/UI/SidebarNavigator.swift" "$DIR/UI/PresetThumbStack.swift" \
-         "$DIR/UI/PreviewPane.swift")
+         "$DIR/UI/PreviewPane.swift" "$DIR/UI/ScreenDropOverlay.swift" "$DIR/UI/DropCoordinator.swift")
 
 compile_arch() {
   local arch="$1" out="$2"
