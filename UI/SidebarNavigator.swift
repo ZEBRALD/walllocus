@@ -780,7 +780,7 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
 
         let box = NSView()
         box.wantsLayer = true
-        box.layer?.cornerRadius = 4.5
+        box.layer?.cornerRadius = 5.5
         box.layer?.masksToBounds = true
         // 只在有封面时才铺底色；纯图标（如「全部」）不要方块底，
         // 否则会变成一个灰色小方块，与照片 App 的裸图标不一致。
@@ -818,8 +818,8 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         NSLayoutConstraint.activate([
             box.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 2),
             box.centerYAnchor.constraint(equalTo: v.centerYAnchor),
-            box.widthAnchor.constraint(equalToConstant: 22),
-            box.heightAnchor.constraint(equalToConstant: 22),
+            box.widthAnchor.constraint(equalToConstant: 27),
+            box.heightAnchor.constraint(equalToConstant: 27),
             img.leadingAnchor.constraint(equalTo: box.leadingAnchor),
             img.trailingAnchor.constraint(equalTo: box.trailingAnchor),
             img.topAnchor.constraint(equalTo: box.topAnchor),
