@@ -434,7 +434,8 @@ final class SidebarNavigator: NSView {
             // 面板已经从窗口顶端开始，红绿灯就嵌在它里面（照片 App 的做法）
             // 红绿灯区(40) + 标题区(56)
             // 标题已移到中栏顶部，左栏直接显示库/预设/显示器列表
-            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            // 顶部与底部一致留 8：16 会让分组标题上方空出一大块
+            scroll.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             // 横向不再内缩：让滚动条贴到面板右缘，与中栏、右栏保持一致。
             // 选中条与边缘的呼吸由 cell 自己的左右内边距承担。
             scroll.leadingAnchor.constraint(equalTo: leadingAnchor),
