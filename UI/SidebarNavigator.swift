@@ -874,8 +874,8 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         NSLayoutConstraint.activate([
             img.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 2),
             img.centerYAnchor.constraint(equalTo: v.centerYAnchor),
-            img.widthAnchor.constraint(equalToConstant: 18),
-            img.heightAnchor.constraint(equalToConstant: 18),
+            img.widthAnchor.constraint(equalToConstant: 22),
+            img.heightAnchor.constraint(equalToConstant: 22),
             label.leadingAnchor.constraint(equalTo: img.trailingAnchor, constant: 7),
             label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: trailingConstant),
             label.centerYAnchor.constraint(equalTo: v.centerYAnchor),
