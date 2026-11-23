@@ -399,6 +399,14 @@ final class SidebarNavigator: NSView {
         suppressCallback = wasSuppressed
     }
 
+    /// 点击左栏以外的区域时调用：只清预设选中。
+    /// 显示器与壁纸库是工作状态（在哪块屏看哪张图），点了别处也必须保持。
+    func clearPresetSelectionIfNeeded() {
+        guard selectedPreset != nil else { return }
+        selectedPreset = nil
+        syncOutlineSelection()
+    }
+
     private func findNode(for selection: SidebarSelection) -> Node? {
         switch selection {
         case .allDisplays:

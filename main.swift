@@ -4320,10 +4320,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     ///
     /// 实现要点：用本地事件监听而非逐个视图加 mouseDown，
     /// 这样按钮、侧栏、缩略图、空白区全都覆盖，且不影响控件自身的点击行为。
+    /// 点击位置是否落在左栏内
+    private func clickIsInsideSidebar(_ event: NSEvent, window w: NSWindow) -> Bool {
+        guard let hit = w.contentView?.hitTest(event.locationInWindow) else { return false }
+        var v: NSView? = hit
+        while let cur = v {
+            if cur === sidebar { return true }
+            v = cur.superview
+        }
+        return false
+    }
+
     private func installClickToEndEditing() {
         guard clickMonitor == nil else { return }
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
             guard let self, let w = self.window else { return event }
+
+            // 点到左栏以外：取消预设选中（预设是「看一眼就收起」的东西）。
+            // 显示器与壁纸库的组合不受影响，它是当前的工作上下文。
+            if !self.clickIsInsideSidebar(event, window: w) {
+                self.sidebar.clearPresetSelectionIfNeeded()
+            }
+
             // 只有当焦点在文本框里时才需要处理
             guard w.firstResponder is NSTextView else { return event }
 
