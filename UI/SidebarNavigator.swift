@@ -191,13 +191,27 @@ final class SidebarNavigator: NSView {
                   let node = self.outline.item(atRow: row) as? Node else { return }
             switch node.kind {
             case .newCategory:
-                self.outline.deselectAll(nil)
                 self.onNewCategory?()
             case .savePreset:
-                self.outline.deselectAll(nil)
                 self.onSavePreset?()
-            default:
-                break        // 可选中的行交给 selectionChanged
+            case .group:
+                break
+            case .allDisplays:
+                self.selectedDisplay = .allDisplays
+                self.syncOutlineSelection()
+                self.onSelect?(.allDisplays)
+            case .display(let id, _):
+                self.selectedDisplay = .display(id)
+                self.syncOutlineSelection()
+                self.onSelect?(.display(id))
+            case .library(let cat):
+                self.selectedLibrary = .library(cat)
+                self.syncOutlineSelection()
+                self.onSelect?(.library(cat))
+            case .preset(let p):
+                self.selectedPreset = .preset(p.id)
+                self.syncOutlineSelection()
+                self.onSelect?(.preset(p.id))
             }
         }
         // 右键：预设行给「应用 / 重命名 / 删除」，其它行不弹菜单
@@ -454,7 +468,10 @@ final class SidebarNavigator: NSView {
             } else {
                 onBlankClick?()
             }
-            super.mouseDown(with: event)
+            // 刻意不调 super.mouseDown：
+            // 它会把选中集替换成「只有刚点的那行」，另外两组先丢高亮再被
+            // syncOutlineSelection 补回来，中间闪一帧蓝框。
+            // 选中状态完全由我们自己按三组记录计算并写入。
         }
 
         /// 右键：先选中该行，再弹出对应菜单。
