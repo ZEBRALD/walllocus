@@ -142,17 +142,25 @@ extension CardView: NSDraggingSource {
 final class RoundedImageView: NSImageView {
     var cornerRadius: CGFloat = 8
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let image, image.size.width > 0, image.size.height > 0 else { return }
-
-        // 按比例缩放到完整放入 bounds
-        let maxW = bounds.width, maxH = bounds.height
-        let scale = min(maxW / image.size.width, maxH / image.size.height)
+    /// 图片在 bounds 中实际占据的矩形（等比缩放后居中）。
+    /// 角标（绿色在用点、视频角标）要贴这个矩形，而不是整个 bounds ——
+    /// 否则竖图两侧留白、横图上下留白，角标位置会随图片比例漂移。
+    var imageRect: NSRect {
+        guard let image, image.size.width > 0, image.size.height > 0 else {
+            return bounds
+        }
+        let scale = min(bounds.width / image.size.width,
+                        bounds.height / image.size.height)
         let drawW = image.size.width * scale
         let drawH = image.size.height * scale
-        let rect = NSRect(x: bounds.midX - drawW / 2,
-                          y: bounds.midY - drawH / 2,
-                          width: drawW, height: drawH)
+        return NSRect(x: bounds.midX - drawW / 2,
+                      y: bounds.midY - drawH / 2,
+                      width: drawW, height: drawH)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let image, image.size.width > 0, image.size.height > 0 else { return }
+        let rect = imageRect
 
         NSGraphicsContext.saveGraphicsState()
         let path = NSBezierPath(roundedRect: rect,
@@ -185,6 +193,8 @@ final class ThumbnailItem: NSCollectionViewItem {
     private let inUseDot = NSView()
     /// 缩略图高度约束（卡片尺寸变化时更新它，让缩略图跟着变大变小）
     private var thumbHeightConstraint: NSLayoutConstraint?
+    /// 防止 viewDidLayout 里重复排队
+    private var badgeNeedsLayout = false
 
     /// 生成拖拽用的快照图。
     ///
@@ -316,8 +326,8 @@ final class ThumbnailItem: NSCollectionViewItem {
             badge.widthAnchor.constraint(equalToConstant: 16),
             badge.heightAnchor.constraint(equalToConstant: 16),
 
-            inUseDot.leadingAnchor.constraint(equalTo: thumbView.leadingAnchor, constant: 5),
-            inUseDot.topAnchor.constraint(equalTo: thumbView.topAnchor, constant: 5),
+            // 位置由 refreshBadgePositions() 按图片实际矩形手动设定，
+            // 不能用约束贴 thumbView 的角 —— 那样竖图/横图的点位置会不一样。
             inUseDot.widthAnchor.constraint(equalToConstant: 8),
             inUseDot.heightAnchor.constraint(equalToConstant: 8),
         ])
@@ -331,6 +341,18 @@ final class ThumbnailItem: NSCollectionViewItem {
     /// 拖拽期间临时隐藏选中环：拖拽时卡片带着粗边框像残影
     var suppressSelectionRing = false {
         didSet { updateSelectionRing() }
+    }
+
+    /// 把「在用」绿点贴到图片实际绘制区域的左上角。
+    /// 图片等比缩放后并不铺满卡片，所以必须跟随 imageRect。
+    func refreshBadgePositions() {
+        guard thumbView.bounds.width > 1 else { return }
+        let r = thumbView.imageRect
+        let size: CGFloat = 8
+        let inset: CGFloat = 4
+        inUseDot.frame = NSRect(x: r.minX + inset,
+                                y: r.maxY - size - inset,
+                                width: size, height: size)
     }
 
     private func updateSelectionRing() {
@@ -352,6 +374,10 @@ final class ThumbnailItem: NSCollectionViewItem {
         badge.isHidden = (kind != .video)
         inUseDot.isHidden = !inUse
         updateSelectionRing()
+        // 位置依赖图片比例与最终布局尺寸，延后一帧再算
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshBadgePositions()
+        }
 
         // 悬停提示：改名后原始文件名在界面上就看不到了，
         // 这里补回来，方便对照 Finder 里的文件。
@@ -410,6 +436,18 @@ final class ThumbnailItem: NSCollectionViewItem {
         let c = thumbView.heightAnchor.constraint(equalToConstant: Self.thumbHeight)
         thumbHeightConstraint = c
         return c
+    }
+
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        // 布局期间不要直接改 frame：这里只标记脏，
+        // 真正的定位留到下一轮 runloop，避免在 layout 中再次触发布局
+        guard !badgeNeedsLayout else { return }
+        badgeNeedsLayout = true
+        DispatchQueue.main.async { [weak self] in
+            self?.badgeNeedsLayout = false
+            self?.refreshBadgePositions()
+        }
     }
 
     override func prepareForReuse() {

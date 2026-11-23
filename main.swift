@@ -1896,8 +1896,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 文件名标题：与预览图同宽，字号与之前的「全部显示器」一致
         paneTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        // 单行 + 中间截断：文件名常有长 UUID 或哈希，截中间比截尾更容易认。
+        // 必须显式单行，否则会换行把下面的预览图挤走。
         paneTitle.lineBreakMode = .byTruncatingMiddle
+        paneTitle.maximumNumberOfLines = 1
+        paneTitle.cell?.wraps = false
+        paneTitle.cell?.isScrollable = false
         paneTitle.translatesAutoresizingMaskIntoConstraints = false
+        // 允许被压缩：优先级降到 250，窗口变窄时标签跟着缩，不会顶出面板。
+        paneTitle.setContentCompressionResistancePriority(.init(250), for: .horizontal)
         let fileTitleW = paneTitle.widthAnchor.constraint(equalToConstant: 270)
         fileTitleW.priority = .init(700)
         detailWidthConstraints.append(fileTitleW)
@@ -1929,11 +1936,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         fileInfoLabel.font = NSFont.systemFont(ofSize: 10.5)
         fileInfoLabel.textColor = .secondaryLabelColor
-        fileInfoLabel.lineBreakMode = .byTruncatingMiddle
-        fileInfoLabel.maximumNumberOfLines = 5
+        // 按字符换行 + 不限行数：长文件名宁可折到下一行，也不要被截断或顶出面板。
+        // （之前是「中间截断 + 最多 5 行」，行数一满就被截，但宽度不够时又会溢出。）
+        fileInfoLabel.lineBreakMode = .byCharWrapping
+        fileInfoLabel.maximumNumberOfLines = 0
         fileInfoLabel.cell?.wraps = true
+        fileInfoLabel.cell?.isScrollable = false
         fileInfoLabel.preferredMaxLayoutWidth = 270
         fileInfoLabel.translatesAutoresizingMaskIntoConstraints = false
+        fileInfoLabel.setContentCompressionResistancePriority(.init(250), for: .horizontal)
         let fileInfoLabelW = fileInfoLabel.widthAnchor.constraint(equalToConstant: 270)
         fileInfoLabelW.priority = .init(700)
         detailWidthConstraints.append(fileInfoLabelW)
@@ -3007,6 +3018,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let contentW = max(80, w - 32)
         if abs((detailWidthConstraints.first?.constant ?? 0) - contentW) > 0.5 {
             for c in detailWidthConstraints { c.constant = contentW }
+            // 多行标签的换行宽度要跟着栏宽走，否则换行点永远停在旧的 270
+            fileInfoLabel.preferredMaxLayoutWidth = contentW
         }
 
         root.frame = NSRect(x: 0, y: 0, width: w, height: root.frame.height)

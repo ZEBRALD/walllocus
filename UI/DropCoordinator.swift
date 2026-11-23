@@ -46,7 +46,9 @@ final class DropCoordinator {
             let name = screen.localizedName
             let size = screen.frame.size
             let res = String(format: "%.0f × %.0f", size.width, size.height)
-            ov.configure(screenName: name, resolution: res, targeted: mode == .all)
+            // 初始一律不高亮：高亮只代表「光标正压在这张卡片上」，
+            // 拖起瞬间光标还在应用窗口里，没有瞄准任何屏幕。
+            ov.configure(screenName: name, resolution: res, targeted: false)
             ov.onDrop = { [weak self] path in
                 guard let self else { return }
                 self.onApply?(path, screen)

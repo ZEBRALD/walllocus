@@ -96,6 +96,9 @@ final class DropZoneView: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
     private var isActive = false
+    /// 延时隐藏计时器：拖拽经过窗口边缘时 entered/exited 会反复触发，
+    /// 每次都立刻隐藏会让浮层闪个不停。
+    private var hideTimer: Timer?
     /// 每次拖入的候选数量，用于在 draggingUpdated 里刷新文案
     private var supportedCount = 0
     private var rejectedCount = 0
@@ -211,13 +214,22 @@ final class DropZoneView: NSView {
     override func addSubview(_ view: NSView) {
         super.addSubview(view)
         guard view !== overlay, overlay.superview === self else { return }
-        super.addSubview(overlay, positioned: .above, relativeTo: nil)
+        // 只在浮层被盖住时才重新置顶，避免无谓的移除-再加（会重置动画状态）
+        if subviews.last !== overlay {
+            super.addSubview(overlay, positioned: .above, relativeTo: nil)
+        }
     }
 
-    /// 布局时把浮层重新提到最前，并更新虚线路径
+    /// 布局时确保浮层在最前。
+    ///
+    /// 关键：只在「浮层不是最后一个子视图」时才重排。
+    /// 每次 layout 都 addSubview(positioned:.above) 会把视图先移除再加回，
+    /// 这会重置 alphaValue 与动画状态 —— 拖拽时 layout 被频繁触发，
+    /// 浮层就闪个不停（而且动画永远播不完）。
     override func layout() {
         super.layout()
-        if overlay.superview === self {
+        guard overlay.superview === self else { return }
+        if subviews.last !== overlay {
             super.addSubview(overlay, positioned: .above, relativeTo: nil)
         }
     }
@@ -275,14 +287,31 @@ final class DropZoneView: NSView {
     private func hideOverlay() {
         guard isActive else { return }
         isActive = false
-        overlay.alphaValue = 0
+        // 不能立刻 isHidden：视图会瞬间消失，淡出动画根本没机会播，
+        // 看起来就是「闪一下」。先做透明度动画，播完再真正隐藏。
         overlay.layer?.removeAllAnimations()
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 1
-        fade.toValue = 0
-        fade.duration = 0.15
-        overlay.layer?.add(fade, forKey: "fadeOut")
-        overlay.isHidden = true
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            overlay.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self, !self.isActive else { return }
+            self.overlay.isHidden = true
+        })
+    }
+
+    /// 延时隐藏：吃掉 entered/exited 的抖动
+    private func scheduleHideOverlay() {
+        hideTimer?.invalidate()
+        let t = Timer(timeInterval: 0.12, repeats: false) { [weak self] _ in
+            self?.hideOverlay()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        hideTimer = t
+    }
+
+    private func cancelScheduledHide() {
+        hideTimer?.invalidate()
+        hideTimer = nil
     }
 
     // MARK: 拖放
@@ -308,6 +337,9 @@ final class DropZoneView: NSView {
         // 库内素材拖回窗口时不该被当成「导入外部文件」：
         // 文件本来就在壁纸文件夹里，导入是空操作，弹出浮层反而干扰。
         if sender.draggingPasteboard.availableType(from: [WallpaperDrag.type]) != nil {
+            // 库内素材拖回：不导入，也不要留着「导入」浮层
+            cancelScheduledHide()
+            hideOverlay()
             return []
         }
         let (ok, bad) = classify(sender)
@@ -317,11 +349,14 @@ final class DropZoneView: NSView {
             if !bad.isEmpty { showOverlay(valid: false) }
             return []
         }
+        cancelScheduledHide()
         showOverlay(valid: true)
         return .copy
     }
 
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 每次更新都取消待隐藏，拖拽在窗口内持续期间浮层不会消失
+        cancelScheduledHide()
         // 拖拽过程中可能从别的窗口继续加文件，数量会变
         let (ok, bad) = classify(sender)
         let changed = ok.count != supportedCount || bad.count != rejectedCount
@@ -336,7 +371,9 @@ final class DropZoneView: NSView {
     }
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
-        hideOverlay()
+        // 拖拽掠过窗口边缘时会反复 entered/exited，
+        // 延时隐藏能吃掉抖动，避免浮层闪烁甚至错过放置
+        scheduleHideOverlay()
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
@@ -344,6 +381,7 @@ final class DropZoneView: NSView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        cancelScheduledHide()
         hideOverlay()
         let (ok, _) = classify(sender)
         guard !ok.isEmpty else { return false }
@@ -352,6 +390,7 @@ final class DropZoneView: NSView {
     }
 
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        cancelScheduledHide()
         hideOverlay()
     }
 }
