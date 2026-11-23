@@ -51,6 +51,10 @@ final class SidebarNavigator: NSView {
 
     private let scroll = NSScrollView()
     private let outline = ClickOutlineView()
+    /// 三组各自独立的选中项（组内单选）
+    private var selectedDisplay: SidebarSelection?
+    private var selectedLibrary: SidebarSelection?
+    private var selectedPreset: SidebarSelection?
     private var presets: [WallpaperPreset] = []
     private var screens: [NSScreen] = []
     private var categories: [String] = []
@@ -166,6 +170,17 @@ final class SidebarNavigator: NSView {
         outline.rowSizeStyle = .default
         outline.floatsGroupRows = false
         outline.indentationPerLevel = 14
+        // 显示器 / 壁纸库 / 预设 三组各自独立选中，
+        // 所以 outline 需要支持多选（组内仍由我们维持单选）。
+        outline.allowsMultipleSelection = true
+        // 点空白处：只取消预设的选中
+        outline.onBlankClick = { [weak self] in
+            guard let self else { return }
+            // 只有预设组会因点空白而取消选中；
+            // 显示器与壁纸库的组合（用哪张图、投到哪块屏）必须一直有效。
+            self.selectedPreset = nil
+            self.syncOutlineSelection()
+        }
         outline.dataSource = self
         outline.delegate = self
         outline.target = self
@@ -318,7 +333,10 @@ final class SidebarNavigator: NSView {
                 categories: [String] = [],
                 statuses: [String: DisplayStatus] = [:],
                 aggregate: DisplayStatus = .empty,
-                selection: SidebarSelection?) {
+                selection: SidebarSelection?,
+                displaySelection: SidebarSelection? = nil,
+                librarySelection: SidebarSelection? = nil,
+                presetSelection: SidebarSelection? = nil) {
         self.presets = presets
         self.screens = screens
         self.categories = categories
@@ -351,21 +369,34 @@ final class SidebarNavigator: NSView {
 
     /// 按选择项定位并高亮（notify=false 表示由外部同步过来，不回抛）
     func select(_ selection: SidebarSelection?, notify: Bool = false) {
-        guard let selection else {
-            suppressCallback = true
-            outline.deselectAll(nil)
-            suppressCallback = false
-            return
+        guard let selection else { return }
+        // 按组更新：只替换同组的选中项，另外两组的选中不动。
+        suppressCallback = !notify
+        defer { suppressCallback = false }
+        switch selection {
+        case .allDisplays, .display:
+            selectedDisplay = selection
+        case .library:
+            selectedLibrary = selection
+        case .preset:
+            selectedPreset = selection
         }
-        if let node = findNode(for: selection) {
-            let row = outline.row(forItem: node)
-            if row >= 0 {
-                suppressCallback = !notify
-                outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-                outline.scrollRowToVisible(row)
-                suppressCallback = false
+        syncOutlineSelection()
+    }
+
+    /// 把三组记录状态同步到 outline 的多选上
+    private func syncOutlineSelection() {
+        var rows = IndexSet()
+        for sel in [selectedDisplay, selectedLibrary, selectedPreset].compactMap({ $0 }) {
+            if let node = findNode(for: sel) {
+                let r = outline.row(forItem: node)
+                if r >= 0 { rows.insert(r) }
             }
         }
+        let wasSuppressed = suppressCallback
+        suppressCallback = true
+        outline.selectRowIndexes(rows, byExtendingSelection: false)
+        suppressCallback = wasSuppressed
     }
 
     private func findNode(for selection: SidebarSelection) -> Node? {
@@ -399,11 +430,16 @@ final class SidebarNavigator: NSView {
         /// 右键菜单：传入行号与视图，返回要弹出的菜单
         var onMenuRow: ((Int, NSView) -> NSMenu?)?
 
+        /// 点空白处（没有落在任何行上）时通知外部
+        var onBlankClick: (() -> Void)?
+
         override func mouseDown(with event: NSEvent) {
             let pt = convert(event.locationInWindow, from: nil)
             let row = self.row(at: pt)
             if row >= 0 {
                 onClickRow?(row)
+            } else {
+                onBlankClick?()
             }
             super.mouseDown(with: event)
         }
@@ -421,27 +457,56 @@ final class SidebarNavigator: NSView {
 
     @objc private func selectionChanged() {
         guard !suppressCallback else { return }
-        let row = outline.selectedRow
-        guard row >= 0, let node = outline.item(atRow: row) as? Node else { return }
+        // 只处理「本次新选中的那一行」，其它组的选中保持不变。
+        // NSTableView 不告诉我们哪一行是刚点中的，所以取 selectedRowIndexes
+        // 与三组已记录状态做差集，找出新增的那个。
+        let rows = outline.selectedRowIndexes
+        var changed: (row: Int, node: Node)?
+        for r in rows {
+            guard let node = outline.item(atRow: r) as? Node else { continue }
+            if !isRecordedSelected(node) { changed = (r, node); break }
+        }
+        guard let (row, node) = changed else { return }
 
         switch node.kind {
         case .allDisplays:
+            selectedDisplay = .allDisplays
             onSelect?(.allDisplays)
         case .display(let id, _):
+            selectedDisplay = .display(id)
             onSelect?(.display(id))
         case .preset(let p):
+            selectedPreset = .preset(p.id)
             onSelect?(.preset(p.id))
-        case .savePreset:
-            // 「保存当前为预设」不是可停留的选中项，回到之前的状态
+        case .savePreset, .newCategory:
+            // 动作行：回调已由 onClickRow 触发，这里只撤掉选中。
+            suppressCallback = true
             outline.deselectRow(row)
-            onSavePreset?()
+            suppressCallback = false
         case .library(let cat):
+            selectedLibrary = .library(cat)
             onSelect?(.library(cat))
-        case .newCategory:
-            outline.deselectRow(row)
-            onNewCategory?()
         case .group:
             break
+        }
+        // 原生点击会把选中集替换成「只有刚点的那一行」，
+        // 这里立刻按三组记录重建，把另外两组的选中补回来。
+        syncOutlineSelection()
+    }
+
+    /// 该节点当前是否已被记入某一组的选中状态
+    private func isRecordedSelected(_ node: Node) -> Bool {
+        switch node.kind {
+        case .allDisplays:
+            return selectedDisplay == .allDisplays
+        case .display(let id, _):
+            return selectedDisplay == .display(id)
+        case .library(let cat):
+            return selectedLibrary == .library(cat)
+        case .preset(let p):
+            return selectedPreset == .preset(p.id)
+        default:
+            return false
         }
     }
 

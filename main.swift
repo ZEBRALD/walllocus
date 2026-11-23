@@ -1117,7 +1117,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 侧栏当前选中项；nil 表示还没选
     /// 侧栏选中项。初始停在「壁纸库 · 全部」——
     /// 这是用户打开面板后最常看的地方，也让侧栏一启动就有明确高亮。
-    private var sidebarSelection: SidebarSelection = .library(nil)
+    // 左栏三组各自独立的选中项（组内单选，组间互不影响）
+    private var displaySelection: SidebarSelection = .allDisplays
+    private var librarySelection: SidebarSelection = .library(nil)
+    private var presetSelection: SidebarSelection?
     /// 搜索过滤词（空 = 不过滤）
     private var searchQuery: String = ""
     /// 当前壁纸库筛选（nil = 全部）
@@ -2179,18 +2182,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func sidebarSelectionChanged(_ sel: SidebarSelection) {
         switch sel {
         case .allDisplays:
-            sidebarSelection = .allDisplays
+            displaySelection = .allDisplays
             targetDisplayID = ""
             refreshControls()
         case .display(let id):
-            sidebarSelection = .display(id)
+            displaySelection = .display(id)
             targetDisplayID = id
             refreshControls()
         case .preset(let id):
-            sidebarSelection = .preset(id)
+            presetSelection = .preset(id)
             showPresetDetail(presetID: id)
         case .library(let cat):
-            sidebarSelection = .library(cat)
+            librarySelection = .library(cat)
             libraryFilter = cat
             reloadLibrary()
             refreshControls()
@@ -2384,7 +2387,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                        categories: wallpaperCategories(),
                        statuses: displayStatusMap().perDisplay,
                        aggregate: displayStatusMap().aggregate,
-                       selection: sidebarSelection)
+                       selection: displaySelection,
+                       librarySelection: librarySelection,
+                       presetSelection: presetSelection)
     }
 
     @objc private func setSortKey(_ sender: NSMenuItem) {
@@ -2665,7 +2670,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
         reloadPresets()
         // 保持选中，方便连续操作
-        sidebarSelection = .preset(id)
+        presetSelection = .preset(id)
         showPresetDetail(presetID: id)
     }
 
@@ -2774,7 +2779,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                        categories: wallpaperCategories(),
                        statuses: st.perDisplay,
                        aggregate: st.aggregate,
-                       selection: sidebarSelection)
+                       selection: displaySelection,
+                       librarySelection: librarySelection,
+                       presetSelection: presetSelection)
         refreshControls()
     }
 
@@ -3725,7 +3732,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                        categories: wallpaperCategories(),
                        statuses: st.perDisplay,
                        aggregate: st.aggregate,
-                       selection: sidebarSelection)
+                       selection: displaySelection,
+                       librarySelection: librarySelection,
+                       presetSelection: presetSelection)
     }
 
     private func refreshPresetButtons() {
@@ -3769,7 +3778,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             st.presets.append(preset)
         }
         // 保存后直接把新预设选中，用户能立刻在侧栏看到它并查看详情
-        sidebarSelection = .preset(preset.id)
+        presetSelection = .preset(preset.id)
         reloadPresets(select: preset.id)
         showPresetDetail(presetID: preset.id)
         flashStatus(L10n.t("preset.saved", trimmed, preset.displayCount))
@@ -3777,7 +3786,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     /// 面板里「加载」按钮：按侧栏当前选中的预设应用。
     @objc private func loadSelectedPresetFromButton() {
-        guard case .preset(let id) = sidebarSelection,
+        guard let sel = presetSelection,
+              case .preset(let id) = sel,
               let p = state.presets.first(where: { $0.id == id }) else { return }
         applyPreset(p)
     }
@@ -4232,7 +4242,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                        categories: wallpaperCategories(),
                        statuses: st.perDisplay,
                        aggregate: st.aggregate,
-                       selection: sidebarSelection)
+                       selection: displaySelection,
+                       librarySelection: librarySelection,
+                       presetSelection: presetSelection)
 
         guard !covered.isEmpty else {
             fullscreenLabel.stringValue = ""
