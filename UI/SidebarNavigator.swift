@@ -393,6 +393,11 @@ final class SidebarNavigator: NSView {
                 if r >= 0 { rows.insert(r) }
             }
         }
+        // 已经是这个集合就什么都不做。
+        // selectRowIndexes(byExtendingSelection: false) 会「先全部清空再重新选中」，
+        // 即使目标集合与现状相同，未受影响的另两组也会闪一帧蓝框。
+        guard rows != outline.selectedRowIndexes else { return }
+
         let wasSuppressed = suppressCallback
         suppressCallback = true
         outline.selectRowIndexes(rows, byExtendingSelection: false)

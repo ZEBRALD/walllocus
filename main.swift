@@ -1067,6 +1067,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let searchField = NSSearchField(frame: .zero)
     /// 点击空白结束编辑的事件监听器
     private var clickMonitor: Any?
+    /// 文件分辨率缓存（路径 → "宽x高"），避免重复异步解析导致文字闪烁
+    private var resolutionCache: [String: String] = [:]
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
     private let addButton = NSButton(title: "", target: nil, action: nil)
     /// 顶栏的「添加壁纸」按钮（加号）
@@ -2247,7 +2249,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             return lines.joined(separator: "\n")
         }
 
-        // 先填一份「不含分辨率」的，避免切换时闪空白
+        // 分辨率有缓存就直接出完整文字，避免「—」→ 真实值 的两段式闪烁
+        if let cached = resolutionCache[path] {
+            fileInfoLabel.stringValue = compose(cached)
+            return
+        }
         fileInfoLabel.stringValue = compose("—")
 
         guard exists else { return }
@@ -2283,8 +2289,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
             let finalRes = res
             DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                // 记下来：下次选中同一张就无需再算，也就不会闪
+                self.resolutionCache[path2] = finalRes
                 // 选中项可能已经变了，只有还是同一路径时才写入
-                guard let self, self.selectedItem?.path == path2 else { return }
+                guard self.selectedItem?.path == path2 else { return }
                 self.fileInfoLabel.stringValue = compose(finalRes)
             }
         }
