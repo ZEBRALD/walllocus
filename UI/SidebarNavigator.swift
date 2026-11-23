@@ -32,6 +32,61 @@ enum SidebarSelection: Equatable {
     case library(String?)
 }
 
+/// 把图片等比放大到铺满自身边界，并居中裁掉多余部分。
+///
+/// NSImageView 的 .scaleProportionallyUpOrDown 是「装进去不裁」，
+/// 竖图会在两侧留白，在方形小格里看就是「没铺满」。
+/// 这里用自绘实现 fill 语义，效果与照片 App 的分类缩略图一致。
+final class FillImageView: NSView {
+    var image: NSImage? {
+        didSet { needsDisplay = true }
+    }
+    /// 图标模式：居中绘制、不裁切（空分类的占位图标用）
+    var isIconMode = false
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let image, bounds.width > 0, bounds.height > 0 else { return }
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        ctx.saveGState()
+        ctx.clip(to: bounds)
+
+        let srcW = image.size.width
+        let srcH = image.size.height
+        guard srcW > 0, srcH > 0 else { ctx.restoreGState(); return }
+
+        if isIconMode {
+            // 图标：等比装进去，居中
+            let scale = min(bounds.width / srcW, bounds.height / srcH)
+            let dw = srcW * scale, dh = srcH * scale
+            image.draw(in: NSRect(x: (bounds.width - dw) / 2, y: (bounds.height - dh) / 2,
+                                  width: dw, height: dh),
+                       from: .zero, operation: .sourceOver, fraction: 1,
+                       respectFlipped: true, hints: nil)
+            ctx.restoreGState()
+            return
+        }
+
+        // 等比放大到刚好铺满，再居中
+        let scale = max(bounds.width / srcW, bounds.height / srcH)
+        let drawW = srcW * scale
+        let drawH = srcH * scale
+        let rect = NSRect(x: (bounds.width - drawW) / 2,
+                          y: (bounds.height - drawH) / 2,
+                          width: drawW,
+                          height: drawH)
+        image.draw(in: rect,
+                   from: .zero,
+                   operation: .sourceOver,
+                   fraction: 1,
+                   respectFlipped: true,
+                   hints: nil)
+        ctx.restoreGState()
+    }
+}
+
 final class SidebarNavigator: NSView {
 
     /// 选中项变化
@@ -662,15 +717,16 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
 
         let box = NSView()
         box.wantsLayer = true
-        box.layer?.cornerRadius = 3.5
+        box.layer?.cornerRadius = 4.5
         box.layer?.masksToBounds = true
         box.layer?.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.18).cgColor
         box.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(box)
 
-        // 有封面就放图片，没有就先放图标占位
-        let img = NSImageView()
-        img.imageScaling = .scaleProportionallyUpOrDown
+        // 有封面就放图片，没有就先放图标占位。
+        // .scaleAxesIndependently 会拉伸变形，这里用自绘的填充方式：
+        // 等比放大到「铺满方块」再居中裁切，与照片 App 一致。
+        let img = FillImageView()
         img.translatesAutoresizingMaskIntoConstraints = false
         box.addSubview(img)
 
@@ -680,8 +736,9 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
                 img.image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
             }
         } else {
+            // 空分类：画一个居中的图标，不铺满
+            img.isIconMode = true
             img.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-            img.contentTintColor = .secondaryLabelColor
         }
 
         let label = NSTextField(labelWithString: title)
@@ -694,8 +751,8 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         NSLayoutConstraint.activate([
             box.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 2),
             box.centerYAnchor.constraint(equalTo: v.centerYAnchor),
-            box.widthAnchor.constraint(equalToConstant: 16),
-            box.heightAnchor.constraint(equalToConstant: 16),
+            box.widthAnchor.constraint(equalToConstant: 22),
+            box.heightAnchor.constraint(equalToConstant: 22),
             img.leadingAnchor.constraint(equalTo: box.leadingAnchor),
             img.trailingAnchor.constraint(equalTo: box.trailingAnchor),
             img.topAnchor.constraint(equalTo: box.topAnchor),
