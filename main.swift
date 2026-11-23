@@ -1176,6 +1176,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     // 软件主菜单里的对应子菜单（与菜单栏镜像）
     private var scaleModeSubmenuApp: NSMenu?
     private var settingsSubmenuApp: NSMenu?
+    private var appSubmenuApp: NSMenu?
+    private var playbackMenuApp: NSMenu?
+    private var playbackMenuStatus: NSMenu?
+    private var wallpaperMenuApp: NSMenu?
+    private var displaysMenuApp: NSMenu?
+    private var libraryMenuApp: NSMenu?
+    private var presetsMenuApp: NSMenu?
     private var appPauseItem: NSMenuItem?
     private var settingsSubmenuStatus: NSMenu?
     private let fullscreenLabel = NSTextField(labelWithString: "")
@@ -4246,51 +4253,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func buildMenu() {
         let mainMenu = NSMenu()
 
-        // —— 应用菜单（保留系统标准项）——
+        // —— 应用菜单 ——
         let appItem = NSMenuItem()
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
+        appMenu.delegate = self
         appItem.submenu = appMenu
+        appSubmenuApp = appMenu
 
-        appMenu.addItem(withTitle: L10n.t("menu.about"),
-                        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
-                        keyEquivalent: "")
-        appMenu.addItem(.separator())
+        // —— 壁纸（文件级操作）——
+        let wpItem = NSMenuItem(title: L10n.t("menu.wallpaperMenu"), action: nil, keyEquivalent: "")
+        let wpSub = NSMenu()
+        wpSub.delegate = self
+        wpItem.submenu = wpSub
+        wallpaperMenuApp = wpSub
+        mainMenu.addItem(wpItem)
 
-        let auto = NSMenuItem(title: L10n.t("menu.launchAtLogin"),
-                              action: #selector(toggleAutoStartMenu),
-                              keyEquivalent: "")
-        auto.target = self
-        auto.state = isAutoStartEnabled() ? .on : .off
-        appMenuAutoItem = auto
-        appMenu.addItem(auto)
+        // —— 预设 ——
+        let preItem = NSMenuItem(title: L10n.t("nav.presets"), action: nil, keyEquivalent: "")
+        let preSub = NSMenu()
+        preSub.delegate = self
+        preItem.submenu = preSub
+        presetsMenuApp = preSub
+        mainMenu.addItem(preItem)
 
-        appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: L10n.t("menu.hide"),
-                        action: #selector(NSApplication.hide(_:)),
-                        keyEquivalent: "h")
-        appMenu.addItem(withTitle: L10n.t("menu.quit"),
-                        action: #selector(NSApplication.terminate(_:)),
-                        keyEquivalent: "q")
+        // —— 图库（浏览级操作）——
+        let libItem = NSMenuItem(title: L10n.t("menu.libraryMenu"), action: nil, keyEquivalent: "")
+        let libSub = NSMenu()
+        libSub.delegate = self
+        libItem.submenu = libSub
+        libraryMenuApp = libSub
+        mainMenu.addItem(libItem)
 
         // —— 播放 ——
-        mainMenu.addItem(submenu(title: L10n.t("menu.playback"), items: { [weak self] sub in
-            guard let self else { return }
-            let pause = NSMenuItem(title: L10n.t("menu.pauseWallpaper"), action: #selector(self.togglePause), keyEquivalent: "")
-            pause.target = self
-            self.appPauseItem = pause
-            sub.addItem(pause)
+        let playItem = NSMenuItem(title: L10n.t("menu.playback"), action: nil, keyEquivalent: "")
+        let playSub = NSMenu()
+        playSub.delegate = self
+        playItem.submenu = playSub
+        playbackMenuApp = playSub
+        mainMenu.addItem(playItem)
 
-            // 菜单每次打开都会重建，所以直接按当前状态决定标题：
-            // 有壁纸时是「停止全部」，停掉后变成「还原壁纸」。
-            let canRestore = self.state.assignment.isEmpty && self.state.canRestoreStopped
-            let stop = NSMenuItem(title: L10n.t(canRestore ? "win.restoreAll" : "menu.stopAll"),
-                                  action: #selector(self.stopAll),
-                                  keyEquivalent: "")
-            stop.target = self
-            stop.isEnabled = canRestore || !self.state.assignment.isEmpty
-            sub.addItem(stop)
-        }))
+        // —— 显示器 ——
+        let dpItem = NSMenuItem(title: L10n.t("nav.displays"), action: nil, keyEquivalent: "")
+        let dpSub = NSMenu()
+        dpSub.delegate = self
+        dpItem.submenu = dpSub
+        displaysMenuApp = dpSub
+        mainMenu.addItem(dpItem)
 
         // —— 缩放模式 ——
         let modeItem = NSMenuItem(title: L10n.t("menu.scaleMode"), action: nil, keyEquivalent: "")
@@ -4300,16 +4309,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         scaleModeSubmenuApp = modeSub
         mainMenu.addItem(modeItem)
 
-        // —— 设置 ——
-        let setItem = NSMenuItem(title: L10n.t("menu.settings"), action: nil, keyEquivalent: "")
-        let setSub = NSMenu()
-        setSub.delegate = self
-        setItem.submenu = setSub
-        settingsSubmenuApp = setSub
-        mainMenu.addItem(setItem)
-
         NSApp.mainMenu = mainMenu
     }
+
 
     /// 构建「设置」子菜单（两处菜单共用）
     private func buildSettingsItems(into sub: NSMenu) {
@@ -4355,6 +4357,289 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         Settings.dragToApplyEnabled.toggle()
     }
 
+    // MARK: - 主菜单的动态子菜单
+
+    /// 「播放」：暂停 + 停止/还原（文案随状态变化，必须动态构建）
+    private func buildPlaybackMenu(into sub: NSMenu, isStatusMenu: Bool = false) {
+        sub.removeAllItems()
+
+        let pause = NSMenuItem(title: L10n.t("menu.pauseWallpaper"),
+                               action: #selector(togglePause), keyEquivalent: "")
+        pause.target = self
+        pause.state = WallpaperManager.shared.isPaused ? .on : .off
+        pause.isEnabled = !state.assignment.isEmpty
+        if isStatusMenu { pauseMenuItem = pause } else { appPauseItem = pause }
+        sub.addItem(pause)
+
+        // 有壁纸时为「停止全部墙纸」，停掉之后变成「还原全部墙纸」
+        let canRestore = state.assignment.isEmpty && state.canRestoreStopped
+        let stop = NSMenuItem(title: L10n.t(canRestore ? "win.restoreAll" : "menu.stopAll"),
+                              action: #selector(stopAll), keyEquivalent: "")
+        stop.target = self
+        stop.isEnabled = canRestore || !state.assignment.isEmpty
+        sub.addItem(stop)
+    }
+
+    /// 应用菜单：关于 / 设置项 / 隐藏 / 退出
+    private func buildAppMenu(into sub: NSMenu) {
+        sub.removeAllItems()
+
+        sub.addItem(withTitle: L10n.t("menu.about"),
+                    action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                    keyEquivalent: "")
+
+        sub.addItem(.separator())
+
+        // —— 设置项全部收进这里 ——
+        let fs = NSMenuItem(title: L10n.t("menu.pauseOnFullscreen"),
+                            action: #selector(toggleFullscreenPause), keyEquivalent: "")
+        fs.target = self
+        fs.state = FullscreenMonitor.shared.isEnabled ? .on : .off
+        fullscreenMenuItem = fs
+        sub.addItem(fs)
+
+        let bat = NSMenuItem(title: L10n.t("menu.pauseOnBattery"),
+                             action: #selector(togglePauseOnBattery), keyEquivalent: "")
+        bat.target = self
+        bat.state = Settings.pauseOnBattery ? .on : .off
+        batteryMenuItem = bat
+        sub.addItem(bat)
+
+        let dragApply = NSMenuItem(title: L10n.t("setting.dragToApply"),
+                                   action: #selector(toggleDragToApply), keyEquivalent: "")
+        dragApply.target = self
+        dragApply.state = Settings.dragToApplyEnabled ? .on : .off
+        sub.addItem(dragApply)
+
+        let auto = NSMenuItem(title: L10n.t("menu.launchAtLogin"),
+                              action: #selector(toggleAutoStartMenu), keyEquivalent: "")
+        auto.target = self
+        auto.state = isAutoStartEnabled() ? .on : .off
+        appMenuAutoItem = auto
+        sub.addItem(auto)
+
+        sub.addItem(.separator())
+
+        sub.addItem(withTitle: L10n.t("menu.hide"),
+                    action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        sub.addItem(withTitle: L10n.t("menu.quit"),
+                    action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    }
+
+    /// 「壁纸」：文件级操作
+    private func buildWallpaperMenu(into sub: NSMenu) {
+        sub.removeAllItems()
+        let hasItem = selectedItem != nil
+
+        let add = NSMenuItem(title: L10n.t("win.addFiles"),
+                             action: #selector(addFiles), keyEquivalent: "o")
+        add.target = self
+        sub.addItem(add)
+
+        let refresh = NSMenuItem(title: L10n.t("library.refresh"),
+                                 action: #selector(refreshLibraryNow), keyEquivalent: "r")
+        refresh.target = self
+        sub.addItem(refresh)
+
+        sub.addItem(.separator())
+
+        let revealFolder = NSMenuItem(title: L10n.t("library.revealFolder"),
+                                      action: #selector(revealWallpaperFolder), keyEquivalent: "")
+        revealFolder.target = self
+        sub.addItem(revealFolder)
+
+        let changeFolder = NSMenuItem(title: L10n.t("setting.changeFolder"),
+                                      action: #selector(changeWallpaperFolder), keyEquivalent: "")
+        changeFolder.target = self
+        sub.addItem(changeFolder)
+
+        sub.addItem(.separator())
+
+        let assign = NSMenuItem(title: L10n.t("win.setWallpaper"),
+                                action: #selector(assignToTarget), keyEquivalent: "")
+        assign.target = self
+        assign.isEnabled = hasItem
+        sub.addItem(assign)
+
+        let reveal = NSMenuItem(title: L10n.t("menu.reveal"),
+                                action: #selector(revealInFinder), keyEquivalent: "")
+        reveal.target = self
+        reveal.isEnabled = hasItem
+        sub.addItem(reveal)
+
+        let trash = NSMenuItem(title: L10n.t("win.removeFromLibrary"),
+                               action: #selector(removeFromLibrary), keyEquivalent: "")
+        trash.target = self
+        trash.isEnabled = hasItem
+        sub.addItem(trash)
+
+    }
+
+    /// 「显示器」：切换目标屏 + 清除壁纸
+    private func buildDisplaysMenu(into sub: NSMenu) {
+        sub.removeAllItems()
+
+        let all = NSMenuItem(title: L10n.t("nav.allDisplays"),
+                             action: #selector(selectAllDisplaysMenu), keyEquivalent: "0")
+        all.target = self
+        all.state = targetDisplayID.isEmpty ? .on : .off
+        sub.addItem(all)
+
+        if !screens.isEmpty {
+            sub.addItem(.separator())
+            for (i, s) in screens.enumerated() {
+                let id = screenID(s)
+                let it = NSMenuItem(title: screenTitle(s),
+                                    action: #selector(selectDisplayMenu(_:)),
+                                    keyEquivalent: i < 9 ? "\(i + 1)" : "")
+                it.target = self
+                it.representedObject = id
+                it.state = (targetDisplayID == id) ? .on : .off
+                sub.addItem(it)
+            }
+        }
+
+        sub.addItem(.separator())
+
+        let clearOne = NSMenuItem(title: L10n.t("win.clearCurrentDisplay"),
+                                  action: #selector(clearCurrentDisplayWallpaper), keyEquivalent: "")
+        clearOne.target = self
+        clearOne.isEnabled = !targetDisplayID.isEmpty && state.assignment[targetDisplayID] != nil
+        sub.addItem(clearOne)
+
+        let clearAll = NSMenuItem(title: L10n.t("win.clearAllDisplays"),
+                                  action: #selector(clearAllDisplaysWallpaper), keyEquivalent: "")
+        clearAll.target = self
+        clearAll.isEnabled = !state.assignment.isEmpty
+        sub.addItem(clearAll)
+    }
+
+    /// 「图库」：分类跳转 + 排序 + 显示选项
+    private func buildLibraryMenu(into sub: NSMenu) {
+        sub.removeAllItems()
+
+        let all = NSMenuItem(title: L10n.t("nav.libraryAll"),
+                             action: #selector(selectLibraryMenu(_:)), keyEquivalent: "")
+        all.target = self
+        all.representedObject = ""
+        if case .library(let c) = librarySelection, c == nil { all.state = .on }
+        sub.addItem(all)
+
+        for cat in wallpaperCategories() {
+            let it = NSMenuItem(title: cat,
+                                action: #selector(selectLibraryMenu(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = cat
+            if case .library(let c) = librarySelection, c == cat { it.state = .on }
+            sub.addItem(it)
+        }
+
+        sub.addItem(.separator())
+
+        let newCat = NSMenuItem(title: L10n.t("category.new"),
+                                action: #selector(newCategory), keyEquivalent: "")
+        newCat.target = self
+        sub.addItem(newCat)
+
+        sub.addItem(.separator())
+
+        let byName = NSMenuItem(title: L10n.t("setting.sortByName"),
+                                action: #selector(setSortKeyMenu(_:)), keyEquivalent: "")
+        byName.target = self
+        byName.representedObject = "name"
+        byName.state = Settings.sortKey == "name" ? .on : .off
+        sub.addItem(byName)
+
+        let byDate = NSMenuItem(title: L10n.t("setting.sortByDate"),
+                                action: #selector(setSortKeyMenu(_:)), keyEquivalent: "")
+        byDate.target = self
+        byDate.representedObject = "date"
+        byDate.state = Settings.sortKey == "date" ? .on : .off
+        sub.addItem(byDate)
+
+        let asc = NSMenuItem(title: L10n.t("setting.sortAsc"),
+                             action: #selector(setSortOrderMenu(_:)), keyEquivalent: "")
+        asc.target = self
+        asc.representedObject = "asc"
+        asc.state = Settings.sortAscending ? .on : .off
+        sub.addItem(asc)
+
+        let desc = NSMenuItem(title: L10n.t("setting.sortDesc"),
+                              action: #selector(setSortOrderMenu(_:)), keyEquivalent: "")
+        desc.target = self
+        desc.representedObject = "desc"
+        desc.state = Settings.sortAscending ? .off : .on
+        sub.addItem(desc)
+
+        sub.addItem(.separator())
+
+        let names = NSMenuItem(title: L10n.t("setting.showFileNames"),
+                               action: #selector(toggleGridFileNames), keyEquivalent: "")
+        names.target = self
+        names.state = Settings.showGridFileNames ? .on : .off
+        sub.addItem(names)
+    }
+
+    /// 「预设」：保存 + 逐个加载
+    private func buildPresetsMenu(into sub: NSMenu) {
+        sub.removeAllItems()
+
+        let save = NSMenuItem(title: L10n.t("preset.saveCurrent"),
+                              action: #selector(savePreset), keyEquivalent: "s")
+        save.target = self
+        sub.addItem(save)
+
+        guard !state.presets.isEmpty else { return }
+        sub.addItem(.separator())
+        for p in state.presets {
+            let it = NSMenuItem(title: p.name,
+                                action: #selector(loadPresetMenu(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = p.id
+            sub.addItem(it)
+        }
+    }
+
+    // MARK: - 动态菜单动作
+
+    @objc private func selectAllDisplaysMenu() {
+        sidebarSelectionChanged(.allDisplays)
+        sidebar.select(.allDisplays)
+    }
+
+    @objc private func selectDisplayMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        sidebarSelectionChanged(.display(id))
+        sidebar.select(.display(id))
+    }
+
+    @objc private func selectLibraryMenu(_ sender: NSMenuItem) {
+        let raw = (sender.representedObject as? String) ?? ""
+        let value: String? = raw.isEmpty ? nil : raw
+        sidebarSelectionChanged(.library(value))
+        sidebar.select(.library(value))
+    }
+
+    @objc private func setSortKeyMenu(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        Settings.sortKey = key
+        resortLibraryInPlace()
+        reloadLibrary()
+    }
+
+    @objc private func setSortOrderMenu(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? String else { return }
+        Settings.sortAscending = (v == "asc")
+        resortLibraryInPlace()
+        reloadLibrary()
+    }
+
+    @objc private func loadPresetMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let p = state.presets.first(where: { $0.id == id }) else { return }
+        applyPreset(p)
+    }
+
     // MARK: 菜单栏图标（关窗后常驻）
 
     private func buildStatusItem() {
@@ -4374,24 +4659,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         menu.addItem(open)
         menu.addItem(.separator())
 
-        // —— 播放 ——
-        menu.addItem(submenu(title: L10n.t("menu.playback"), items: { [weak self] sub in
-            guard let self else { return }
-            let pause = NSMenuItem(title: L10n.t("menu.pauseWallpaper"), action: #selector(self.togglePause), keyEquivalent: "")
-            pause.target = self
-            self.pauseMenuItem = pause
-            sub.addItem(pause)
-
-            // 菜单每次打开都会重建，所以直接按当前状态决定标题：
-            // 有壁纸时是「停止全部」，停掉后变成「还原壁纸」。
-            let canRestore = self.state.assignment.isEmpty && self.state.canRestoreStopped
-            let stop = NSMenuItem(title: L10n.t(canRestore ? "win.restoreAll" : "menu.stopAll"),
-                                  action: #selector(self.stopAll),
-                                  keyEquivalent: "")
-            stop.target = self
-            stop.isEnabled = canRestore || !self.state.assignment.isEmpty
-            sub.addItem(stop)
-        }))
+        // —— 播放（动态构建：停止/还原的文案随状态变化）——
+        let playItem = NSMenuItem(title: L10n.t("menu.playback"), action: nil, keyEquivalent: "")
+        let playSub = NSMenu()
+        playSub.delegate = self
+        playItem.submenu = playSub
+        playbackMenuStatus = playSub
+        menu.addItem(playItem)
 
         // —— 缩放模式（当前选中素材）——
         let modeItem = NSMenuItem(title: L10n.t("menu.scaleMode"), action: nil, keyEquivalent: "")
@@ -4714,6 +4988,20 @@ extension AppDelegate: NSMenuDelegate {
             rebuildScaleModeMenu(into: menu)
         } else if menu === settingsSubmenuStatus || menu === settingsSubmenuApp {
             buildSettingsItems(into: menu)
+        } else if menu === appSubmenuApp {
+            buildAppMenu(into: menu)
+        } else if menu === playbackMenuStatus {
+            buildPlaybackMenu(into: menu, isStatusMenu: true)
+        } else if menu === playbackMenuApp {
+            buildPlaybackMenu(into: menu)
+        } else if menu === wallpaperMenuApp {
+            buildWallpaperMenu(into: menu)
+        } else if menu === displaysMenuApp {
+            buildDisplaysMenu(into: menu)
+        } else if menu === libraryMenuApp {
+            buildLibraryMenu(into: menu)
+        } else if menu === presetsMenuApp {
+            buildPresetsMenu(into: menu)
         } else {
             refreshMenuStates()
         }
