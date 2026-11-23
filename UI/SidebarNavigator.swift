@@ -45,10 +45,11 @@ final class SoftRowView: NSTableRowView {
     override func drawBackground(in dirtyRect: NSRect) {
         guard isSelected else { return }
         let insetY: CGFloat = 1
-        let r = NSRect(x: 0, y: insetY,
-                       width: bounds.width, height: bounds.height - insetY * 2)
+        // 左右各留 6、上下各留 1，让选中块浮在行内而不是贴满整条
+        let r = NSRect(x: 6, y: 1,
+                       width: bounds.width - 12, height: bounds.height - 2)
         let path = NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7)
-        NSColor.white.withAlphaComponent(0.16).setFill()
+        NSColor.white.withAlphaComponent(0.18).setFill()
         path.fill()
     }
 
@@ -63,7 +64,10 @@ final class SoftRowView: NSTableRowView {
     }
 
     private func applyTextColor() {
-        let color: NSColor = isSelected ? .controlAccentColor : .labelColor
+        // 比系统强调蓝亮一档：深色玻璃底上原色偏暗
+        let color: NSColor = isSelected
+            ? NSColor(srgbRed: 0.42, green: 0.68, blue: 1.0, alpha: 1.0)
+            : .labelColor
         tintTexts(in: self, color: color)
     }
 
@@ -709,9 +713,9 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
     func outlineView(_ ov: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
         guard let node = item as? Node else { return 26 }
         switch node.kind {
-        case .group: return 26
+        case .group: return 28
         case .preset: return 62      // 预设卡片要给叠图留高度
-        default: return 30
+        default: return 36           // 与照片 App 的行高对齐，选中块更有呼吸感
         }
     }
 
