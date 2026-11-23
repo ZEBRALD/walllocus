@@ -1286,6 +1286,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // ── 三栏 ──────────────────────────────────────────────
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         sidebar.onSelect = { [weak self] sel in self?.sidebarSelectionChanged(sel) }
+        // 素材拖到左栏的显示器行 → 应用到那块屏
+        sidebar.onDropWallpaper = { [weak self] path, displayID in
+            self?.applyWallpaper(path: path, displayID: displayID)
+        }
         sidebar.onSavePreset = { [weak self] in self?.savePreset() }
         sidebar.onNewCategory = { [weak self] in self?.newCategory() }
         sidebar.onPresetMenu = { [weak self] id, view in
@@ -3464,6 +3468,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 壁纸文件夹下的所有分类（子文件夹名），按名称排序
+    /// 把某个素材应用到指定显示器（displayID 为空串表示全部）。
+    ///
+    /// 拖拽两条路径（左栏显示器行、屏幕覆盖层）都走这里，
+    /// 保证行为与状态栏提示完全一致。
+    func applyWallpaper(path: String, displayID: String) {
+        guard FileManager.default.fileExists(atPath: path) else {
+            flashStatus(L10n.t("detail.fileMissing"))
+            return
+        }
+        guard state.library.contains(where: { $0.path == path }) else { return }
+
+        StateStore.shared.update { st in
+            if displayID.isEmpty {
+                for s in self.screens {
+                    st.assignment[screenID(s)] = path
+                }
+            } else {
+                st.assignment[displayID] = path
+            }
+            // 用户手动改了配置，旧的「停止前快照」不再有意义
+            st.stoppedAssignment = nil
+        }
+        WallpaperManager.shared.applyAll()
+
+        // 状态栏确认
+        let name = (path as NSString).lastPathComponent
+        if displayID.isEmpty {
+            flashStatus(L10n.t("wallpaper.appliedAll", name))
+        } else if let s = screens.first(where: { screenID($0) == displayID }) {
+            flashStatus(L10n.t("wallpaper.appliedOne", name, s.localizedName))
+        } else {
+            flashStatus(L10n.t("wallpaper.appliedAll", name))
+        }
+        refreshControls()
+    }
+
     /// 每个分类的封面：取该分类里的第一张图片素材。
     /// 侧栏用它渲染圆角方形缩略图，替代原来的文件夹图标。
     private func categoryCoverMap() -> [String: String] {

@@ -42,15 +42,30 @@ enum SidebarSelection: Equatable {
 final class SoftRowView: NSTableRowView {
     // selectionHighlightStyle = .none 时 drawSelection 不会被调用，
     // 所以选中底色改在 drawBackground 里自己画。
+    /// 素材正被拖到这一行上：画强调色描边
+    var isDropTarget = false {
+        didSet { if oldValue != isDropTarget { needsDisplay = true } }
+    }
+
     override func drawBackground(in dirtyRect: NSRect) {
-        guard isSelected else { return }
-        let insetY: CGFloat = 1
         // 左右各留 6、上下各留 1，让选中块浮在行内而不是贴满整条
         let r = NSRect(x: 6, y: 1,
                        width: bounds.width - 12, height: bounds.height - 2)
-        let path = NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7)
-        NSColor.white.withAlphaComponent(0.18).setFill()
-        path.fill()
+
+        if isSelected {
+            let path = NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7)
+            NSColor.white.withAlphaComponent(0.18).setFill()
+            path.fill()
+        }
+
+        if isDropTarget {
+            let path = NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7)
+            NSColor.controlAccentColor.withAlphaComponent(0.20).setFill()
+            path.fill()
+            path.lineWidth = 1.5
+            NSColor.controlAccentColor.setStroke()
+            path.stroke()
+        }
     }
 
     /// 选中时把行内文字染成强调色（照片 App 的做法），取消选中恢复白色。
@@ -150,6 +165,9 @@ final class SidebarNavigator: NSView {
     var onPresetMenu: ((String, NSView) -> NSMenu?)?
     /// 点「新建分类」
     var onNewCategory: (() -> Void)?
+    /// 素材被拖到某个显示器行：应用到那块屏。
+    /// 参数为 (素材路径, 显示器 UUID；空串代表「全部显示器」)
+    var onDropWallpaper: ((String, String) -> Void)?
 
     /// 更新面板顶部的标题与副标题
     func setHeader(title: String, subtitle: String) {
@@ -285,6 +303,21 @@ final class SidebarNavigator: NSView {
         // 显示器 / 壁纸库 / 预设 三组各自独立选中，
         // 所以 outline 需要支持多选（组内仍由我们维持单选）。
         outline.allowsMultipleSelection = true
+        // 接受图库素材：拖到显示器行 → 应用到该屏
+        outline.registerForDraggedTypes([WallpaperDrag.type])
+        outline.displayIDForRow = { [weak self] row in
+            guard let self,
+                  let node = self.outline.item(atRow: row) as? Node else { return nil }
+            switch node.kind {
+            case .allDisplays: return ""              // 空串 = 全部显示器
+            case .display(let id, _): return id
+            default: return nil                       // 其它行不接受
+            }
+        }
+        outline.onWallpaperDropped = { [weak self] path, id in
+            self?.onDropWallpaper?(path, id)
+        }
+
         // 点空白处：只取消预设的选中
         outline.onBlankClick = { [weak self] in
             guard let self else { return }
@@ -574,6 +607,72 @@ final class SidebarNavigator: NSView {
 
         /// 点空白处（没有落在任何行上）时通知外部
         var onBlankClick: (() -> Void)?
+        /// 素材拖到某个显示器行：返回该行的 displayID（空串=全部显示器）
+        var displayIDForRow: ((Int) -> String?)?
+        /// 拖拽被接受时的回调：(素材路径, displayID)
+        var onWallpaperDropped: ((String, String) -> Void)?
+        /// 当前被拖拽高亮的行（用于绘制提示）
+        private(set) var dropHighlightRow: Int = -1 {
+            didSet { if oldValue != dropHighlightRow { refreshDropHighlight(old: oldValue) } }
+        }
+
+        /// 把库内素材拖到显示器行上：接受并高亮该行。
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            guard sender.draggingPasteboard.availableType(from: [WallpaperDrag.type]) != nil
+            else { return [] }
+            return updateDropTarget(sender)
+        }
+
+        override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+            guard sender.draggingPasteboard.availableType(from: [WallpaperDrag.type]) != nil
+            else { return [] }
+            return updateDropTarget(sender)
+        }
+
+        override func draggingExited(_ sender: NSDraggingInfo?) {
+            dropHighlightRow = -1
+        }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            defer { dropHighlightRow = -1 }
+            let pt = convert(sender.draggingLocation, from: nil)
+            let row = self.row(at: pt)
+            guard row >= 0,
+                  let id = displayIDForRow?(row),
+                  let path = sender.draggingPasteboard.string(forType: WallpaperDrag.type)
+            else { return false }
+            onWallpaperDropped?(path, id)
+            return true
+        }
+
+        /// 命中显示器行就高亮它，其它行不接受放置。
+        private func updateDropTarget(_ sender: NSDraggingInfo) -> NSDragOperation {
+            let pt = convert(sender.draggingLocation, from: nil)
+            let row = self.row(at: pt)
+            if row >= 0, displayIDForRow?(row) != nil {
+                dropHighlightRow = row
+                return .copy
+            }
+            dropHighlightRow = -1
+            return []
+        }
+
+        private func refreshDropHighlight(old: Int) {
+            for r in [old, dropHighlightRow] where r >= 0 {
+                if let v = rowView(atRow: r, makeIfNecessary: false) {
+                    v.needsDisplay = true
+                }
+            }
+            // 高亮行本身也要重绘（SoftRowView 的 drawBackground 读 dropHighlight）
+            if dropHighlightRow >= 0,
+               let rv = rowView(atRow: dropHighlightRow, makeIfNecessary: false) as? SoftRowView {
+                rv.isDropTarget = true
+            }
+            if old >= 0, old != dropHighlightRow,
+               let rv = rowView(atRow: old, makeIfNecessary: false) as? SoftRowView {
+                rv.isDropTarget = false
+            }
+        }
 
         override func mouseDown(with event: NSEvent) {
             let pt = convert(event.locationInWindow, from: nil)
