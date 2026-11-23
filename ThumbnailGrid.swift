@@ -22,11 +22,20 @@ final class CardView: NSView {
     /// 双击：进入重命名
     var onDoubleClick: (() -> Void)?
 
+    /// 拖拽开始：由外部提供素材路径与拖拽快照。
+    /// 返回 nil 表示当前卡片不可拖（例如文件已丢失）。
+    var dragPayload: (() -> (path: String, snapshot: NSImage)?)?
+
+    /// 触发拖拽所需的最小位移。低于这个值仍按单击处理。
+    private static let dragThreshold: CGFloat = 4
+    private var mouseDownPoint: NSPoint?
+
     override func menu(for event: NSEvent) -> NSMenu? {
         onRightClick?()
     }
 
     override func mouseDown(with event: NSEvent) {
+        mouseDownPoint = convert(event.locationInWindow, from: nil)
         // 单击：在 mouseDown 就提交选中，求即时反馈。
         // 只在 clickCount == 1 时选中；第二次按下不能再次触发，
         // 否则「双击」会被拆成两次单击。
@@ -41,11 +50,63 @@ final class CardView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        mouseDownPoint = nil
         // 双击：抬手时按 clickCount 判定，进入重命名。
         if event.clickCount == 2 {
             onDoubleClick?()
         }
         // 同样不转发，避免 super 再次改焦点
+    }
+
+    // MARK: - 拖拽出库（拖到屏幕上应用壁纸）
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = mouseDownPoint,
+              let payload = dragPayload?() else { return }
+
+        let now = convert(event.locationInWindow, from: nil)
+        let dx = now.x - start.x, dy = now.y - start.y
+        // 位移不足时不算拖拽，仍交给单击逻辑
+        guard (dx * dx + dy * dy) >= (Self.dragThreshold * Self.dragThreshold) else { return }
+
+        // 只发起一次：清掉起点，避免同一次拖动反复 beginDraggingSession
+        mouseDownPoint = nil
+
+        let pb = NSPasteboardItem()
+        // 自有类型：屏幕覆盖层只认这个，窗口的导入区只认 fileURL，
+        // 两者互不干扰。
+        pb.setString(payload.path, forType: WallpaperDrag.type)
+        // 同时给 fileURL，让素材也能拖到访达或其它 App
+        pb.setString(URL(fileURLWithPath: payload.path).absoluteString,
+                     forType: .fileURL)
+
+        let item = NSDraggingItem(pasteboardWriter: pb)
+        let snap = payload.snapshot
+        let size = snap.size
+        // 把快照中心对准光标：系统默认以左下角为锚会显得「偏」
+        let frame = NSRect(x: now.x - size.width / 2,
+                           y: now.y - size.height / 2,
+                           width: size.width, height: size.height)
+        item.setDraggingFrame(frame, contents: snap)
+
+        let session = beginDraggingSession(with: [item], event: event, source: self)
+        session.animatesToStartingPositionsOnCancelOrFail = true
+    }
+}
+
+// MARK: - 拖拽约定
+
+enum WallpaperDrag {
+    /// 图库素材的自有拖拽类型。用自有 UTI 而不是 fileURL，
+    /// 是为了让「拖到屏幕上应用」和「拖文件进窗口导入」严格区分开。
+    static let type = NSPasteboard.PasteboardType("app.walllocus.wallpaper")
+}
+
+extension CardView: NSDraggingSource {
+    func draggingSession(_ session: NSDraggingSession,
+                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        // 拖出应用（甩到屏幕上）用 copy：源素材不动
+        context == .outsideApplication ? .copy : .generic
     }
 }
 
@@ -103,6 +164,40 @@ final class ThumbnailItem: NSCollectionViewItem {
     /// 缩略图高度约束（卡片尺寸变化时更新它，让缩略图跟着变大变小）
     private var thumbHeightConstraint: NSLayoutConstraint?
 
+    /// 生成拖拽用的快照图。
+    ///
+    /// 必须与 RoundedImageView 的绘制方式一致 —— 按比例缩放「装进」框内、
+    /// 只对图片实际占据的矩形裁圆角 —— 否则拖到屏幕外的样子会和网格里
+    /// 看到的不一样（竖图尤其明显）。
+    ///
+    /// 尺寸取 thumbView 的当前尺寸（随窗口列数变化），不含文件名。
+    func makeDragSnapshot() -> NSImage? {
+        guard let image = thumbView.image, image.size.width > 0, image.size.height > 0 else {
+            return nil
+        }
+        let box = thumbView.bounds.size
+        guard box.width > 1, box.height > 1 else { return nil }
+
+        let scale = min(box.width / image.size.width, box.height / image.size.height)
+        let drawW = image.size.width * scale
+        let drawH = image.size.height * scale
+        let rect = NSRect(x: (box.width - drawW) / 2,
+                          y: (box.height - drawH) / 2,
+                          width: drawW, height: drawH)
+        let radius = thumbView.cornerRadius
+
+        let snap = NSImage(size: box, flipped: false) { _ in
+            NSGraphicsContext.saveGraphicsState()
+            let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+            path.addClip()
+            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+            NSGraphicsContext.restoreGraphicsState()
+            return true
+        }
+        // 透明底：卡片本身没有底色，拖拽时不该出现一块深灰
+        return snap
+    }
+
     private(set) var representedPath: String?
     /// 单击卡片（即时选中，不等双击判定窗口）
     var onSingleClick: ((String) -> Void)?
@@ -128,6 +223,14 @@ final class ThumbnailItem: NSCollectionViewItem {
         v.onDoubleClick = { [weak self] in
             guard let self, let path = self.representedPath else { return }
             self.onDoubleClick?(path)
+        }
+        // 拖拽快照：用当前缩略图按卡片「实际显示尺寸」重绘，
+        // 保证拖到屏幕外时与网格里看到的大小、圆角、裁切完全一致。
+        v.dragPayload = { [weak self] in
+            guard let self, let path = self.representedPath else { return nil }
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
+            guard let snap = self.makeDragSnapshot() else { return nil }
+            return (path, snap)
         }
         v.wantsLayer = true
         // 照片 App 的图片没有卡片边框，只有一个圆角矩形的图片本身。

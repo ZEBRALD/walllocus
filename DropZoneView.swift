@@ -305,6 +305,11 @@ final class DropZoneView: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 库内素材拖回窗口时不该被当成「导入外部文件」：
+        // 文件本来就在壁纸文件夹里，导入是空操作，弹出浮层反而干扰。
+        if sender.draggingPasteboard.availableType(from: [WallpaperDrag.type]) != nil {
+            return []
+        }
         let (ok, bad) = classify(sender)
         supportedCount = ok.count
         rejectedCount = bad.count
