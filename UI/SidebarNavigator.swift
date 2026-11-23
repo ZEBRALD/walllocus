@@ -37,12 +37,55 @@ enum SidebarSelection: Equatable {
 /// NSImageView 的 .scaleProportionallyUpOrDown 是「装进去不裁」，
 /// 竖图会在两侧留白，在方形小格里看就是「没铺满」。
 /// 这里用自绘实现 fill 语义，效果与照片 App 的分类缩略图一致。
+/// 侧栏行：选中时画一个浅灰圆角块，文字本身不反白。
+/// 系统的 .regular/.sourceList 高亮是整行蓝底 + 白字，与照片 App 不同。
+final class SoftRowView: NSTableRowView {
+    // selectionHighlightStyle = .none 时 drawSelection 不会被调用，
+    // 所以选中底色改在 drawBackground 里自己画。
+    override func drawBackground(in dirtyRect: NSRect) {
+        guard isSelected else { return }
+        let insetY: CGFloat = 1
+        let r = NSRect(x: 0, y: insetY,
+                       width: bounds.width, height: bounds.height - insetY * 2)
+        let path = NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7)
+        NSColor.white.withAlphaComponent(0.16).setFill()
+        path.fill()
+    }
+
+    /// 选中时把行内文字染成强调色（照片 App 的做法），取消选中恢复白色。
+    override var isSelected: Bool {
+        didSet { if isSelected != oldValue { applyTextColor() } }
+    }
+
+    override func layout() {
+        super.layout()
+        applyTextColor()
+    }
+
+    private func applyTextColor() {
+        let color: NSColor = isSelected ? .controlAccentColor : .labelColor
+        tintTexts(in: self, color: color)
+    }
+
+    private func tintTexts(in view: NSView, color: NSColor) {
+        for sub in view.subviews {
+            if let tf = sub as? NSTextField { tf.textColor = color }
+            tintTexts(in: sub, color: color)
+        }
+    }
+
+    /// 不让系统把选中行文字改成白色（我们自己控制颜色）
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
+}
+
 final class FillImageView: NSView {
     var image: NSImage? {
         didSet { needsDisplay = true }
     }
     /// 图标模式：居中绘制、不裁切（空分类的占位图标用）
     var isIconMode = false
+    /// 图标颜色。液体玻璃底色偏深，图标要用浅色才看得清。
+    var iconTint: NSColor = .white
 
     override var isFlipped: Bool { true }
 
@@ -58,13 +101,19 @@ final class FillImageView: NSView {
         guard srcW > 0, srcH > 0 else { ctx.restoreGState(); return }
 
         if isIconMode {
-            // 图标：等比装进去，居中
+            // 图标：等比装进去、居中，并按 iconTint 着色。
+            // 液体玻璃底色深，直接用模板原色会看不清。
             let scale = min(bounds.width / srcW, bounds.height / srcH)
             let dw = srcW * scale, dh = srcH * scale
-            image.draw(in: NSRect(x: (bounds.width - dw) / 2, y: (bounds.height - dh) / 2,
-                                  width: dw, height: dh),
-                       from: .zero, operation: .sourceOver, fraction: 1,
-                       respectFlipped: true, hints: nil)
+            let rect = NSRect(x: (bounds.width - dw) / 2, y: (bounds.height - dh) / 2,
+                              width: dw, height: dh)
+            let tinted = NSImage(size: rect.size, flipped: false) { r in
+                image.draw(in: r)
+                self.iconTint.set()
+                r.fill(using: .sourceAtop)
+                return true
+            }
+            tinted.draw(in: rect)
             ctx.restoreGState()
             return
         }
@@ -223,7 +272,9 @@ final class SidebarNavigator: NSView {
         outline.style = .sourceList
         // 照片 App 的选中态是「圆角胶囊包住内容」，不是整行铺满。
         // sourceList 样式会铺满整行，这里改用 inset 的普通高亮。
-        outline.selectionHighlightStyle = .regular
+        // 选中态完全自绘（见 SoftRowView）：用 .none 关掉系统蓝底，
+        // 否则系统那层会先画上去，我们的灰底只叠在上面盖不住。
+        outline.selectionHighlightStyle = .none
         outline.rowSizeStyle = .default
         outline.floatsGroupRows = false
         outline.indentationPerLevel = 14
@@ -647,6 +698,12 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         guard let node = item as? Node else { return false }
         if case .group = node.kind { return false }
         return true
+    }
+
+    /// 自定义选中行外观：圆角浅灰底，不铺整行、不用系统蓝。
+    /// 照片 App 的选中态就是「浅色圆角块 + 文字着色」。
+    func outlineView(_ ov: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        SoftRowView()
     }
 
     func outlineView(_ ov: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
