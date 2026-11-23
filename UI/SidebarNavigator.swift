@@ -701,7 +701,9 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
             let title = cat ?? L10n.t("nav.libraryAll")
             // 分类行显示该分类的封面缩略图，与照片 App 一致
             let cover = cat.flatMap { categoryCovers[$0] }
-            return thumbCell(coverPath: cover, symbol: cat == nil ? "square.grid.2x2" : "folder",
+            // 图标参照照片 App 的「所有相簿」：两条堆叠的横条。
+            // 「全部」没有具体文件对应，用图标而非封面缩略图。
+            return thumbCell(coverPath: cover, symbol: cat == nil ? "rectangle.stack" : "folder",
                              title: title)
 
         case .newCategory:
@@ -719,7 +721,11 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
         box.wantsLayer = true
         box.layer?.cornerRadius = 4.5
         box.layer?.masksToBounds = true
-        box.layer?.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.18).cgColor
+        // 只在有封面时才铺底色；纯图标（如「全部」）不要方块底，
+        // 否则会变成一个灰色小方块，与照片 App 的裸图标不一致。
+        box.layer?.backgroundColor = coverPath == nil
+            ? NSColor.clear.cgColor
+            : NSColor.secondaryLabelColor.withAlphaComponent(0.18).cgColor
         box.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(box)
 
