@@ -2398,7 +2398,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                        aggregate: displayStatusMap().aggregate,
                        selection: displaySelection,
                        librarySelection: librarySelection,
-                       presetSelection: presetSelection)
+                       presetSelection: presetSelection,
+                       categoryCovers: categoryCoverMap())
     }
 
     @objc private func setSortKey(_ sender: NSMenuItem) {
@@ -2790,7 +2791,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                        aggregate: st.aggregate,
                        selection: displaySelection,
                        librarySelection: librarySelection,
-                       presetSelection: presetSelection)
+                       presetSelection: presetSelection,
+                       categoryCovers: categoryCoverMap())
         refreshControls()
     }
 
@@ -3462,6 +3464,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     }
 
     /// 壁纸文件夹下的所有分类（子文件夹名），按名称排序
+    /// 每个分类的封面：取该分类里的第一张图片素材。
+    /// 侧栏用它渲染圆角方形缩略图，替代原来的文件夹图标。
+    private func categoryCoverMap() -> [String: String] {
+        var map: [String: String] = [:]
+        var allCover: String?
+        for item in state.library {
+            // 「全部」用整个库的第一张
+            if allCover == nil { allCover = item.path }
+            let cat = item.category
+            guard !cat.isEmpty else { continue }
+            if map[cat] == nil { map[cat] = item.path }
+        }
+        return map
+    }
+
     private func wallpaperCategories() -> [String] {
         // 缓存结果：分类只在扫描文件夹时才会变，
         // 而 reloadLibrary 会被搜索 / 选中 / 状态刷新频繁调用，
@@ -3743,7 +3760,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                        aggregate: st.aggregate,
                        selection: displaySelection,
                        librarySelection: librarySelection,
-                       presetSelection: presetSelection)
+                       presetSelection: presetSelection,
+                       categoryCovers: categoryCoverMap())
     }
 
     private func refreshPresetButtons() {
@@ -4253,7 +4271,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                        aggregate: st.aggregate,
                        selection: displaySelection,
                        librarySelection: librarySelection,
-                       presetSelection: presetSelection)
+                       presetSelection: presetSelection,
+                       categoryCovers: categoryCoverMap())
 
         guard !covered.isEmpty else {
             fullscreenLabel.stringValue = ""

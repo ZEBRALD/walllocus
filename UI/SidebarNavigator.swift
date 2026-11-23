@@ -58,6 +58,8 @@ final class SidebarNavigator: NSView {
     private var presets: [WallpaperPreset] = []
     private var screens: [NSScreen] = []
     private var categories: [String] = []
+    /// 每个分类的封面图路径（取该分类第一张素材），用于渲染缩略图方块
+    private var categoryCovers: [String: String] = [:]
     /// 面板顶部的大标题与副标题（原在顶栏，现移入侧栏内部）
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
@@ -350,8 +352,10 @@ final class SidebarNavigator: NSView {
                 selection: SidebarSelection?,
                 displaySelection: SidebarSelection? = nil,
                 librarySelection: SidebarSelection? = nil,
-                presetSelection: SidebarSelection? = nil) {
+                presetSelection: SidebarSelection? = nil,
+                categoryCovers: [String: String] = [:]) {
         self.presets = presets
+        self.categoryCovers = categoryCovers
         self.screens = screens
         self.categories = categories
         self.displayStatuses = statuses
@@ -640,13 +644,67 @@ extension SidebarNavigator: NSOutlineViewDataSource, NSOutlineViewDelegate {
 
         case .library(let cat):
             let title = cat ?? L10n.t("nav.libraryAll")
-            return iconCell(symbol: cat == nil ? "square.grid.2x2" : "folder",
-                            title: title, dim: false)
+            // 分类行显示该分类的封面缩略图，与照片 App 一致
+            let cover = cat.flatMap { categoryCovers[$0] }
+            return thumbCell(coverPath: cover, symbol: cat == nil ? "square.grid.2x2" : "folder",
+                             title: title)
 
         case .newCategory:
             return iconCell(symbol: "folder.badge.plus",
                             title: L10n.t("category.new"), dim: true)
         }
+    }
+
+    /// 分类行：左侧是圆角方形的封面缩略图，没有封面时退回图标。
+    /// 尺寸与 iconCell 的图标一致（16pt），保证两种行左缘对齐。
+    private func thumbCell(coverPath: String?, symbol: String, title: String) -> NSView {
+        let v = NSView()
+
+        let box = NSView()
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 3.5
+        box.layer?.masksToBounds = true
+        box.layer?.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.18).cgColor
+        box.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(box)
+
+        // 有封面就放图片，没有就先放图标占位
+        let img = NSImageView()
+        img.imageScaling = .scaleProportionallyUpOrDown
+        img.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(img)
+
+        if let cover = coverPath {
+            ThumbnailStore.shared.thumbnail(for: cover) { [weak img] cg in
+                guard let img, let cg else { return }
+                img.image = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            }
+        } else {
+            img.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            img.contentTintColor = .secondaryLabelColor
+        }
+
+        let label = NSTextField(labelWithString: title)
+        label.font = NSFont.systemFont(ofSize: 12)
+        label.textColor = .labelColor
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        v.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            box.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 2),
+            box.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            box.widthAnchor.constraint(equalToConstant: 16),
+            box.heightAnchor.constraint(equalToConstant: 16),
+            img.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+            img.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+            img.topAnchor.constraint(equalTo: box.topAnchor),
+            img.bottomAnchor.constraint(equalTo: box.bottomAnchor),
+            label.leadingAnchor.constraint(equalTo: box.trailingAnchor, constant: 7),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -2),
+            label.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+        ])
+        return v
     }
 
     private func iconCell(symbol: String, title: String, dim: Bool,
