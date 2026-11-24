@@ -721,6 +721,15 @@ enum Settings {
     }
 
     /// 右栏宽度
+    /// 左栏是否收起（持久化，与右栏一致的做法）
+    static var sidebarCollapsed: Bool {
+        get { UserDefaults.standard.bool(forKey: "sidebarCollapsed") }
+        set { UserDefaults.standard.set(newValue, forKey: "sidebarCollapsed") }
+    }
+
+    /// 动画时长（左/右栏收起、网格缩放共用一套节奏）
+    static let paneAnimationDuration: TimeInterval = 0.24
+
     /// 网格列数：3 / 5 / 7 / 9（照片 App 的档位）
     static var gridColumnCount: Int {
         get {
@@ -1307,6 +1316,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var resolutionCache: [String: String] = [:]
     private let settingsButton = CircleGlassButton()
     /// 折叠右栏按钮：浏览大量壁纸时把操作栏收起来，让中栏独享宽度
+    /// 左栏收起按钮（照片 App 放在左栏右上角）
+    private let sidebarCollapseButton = CircleGlassButton()
+    /// 左栏是否收起
+    private var sidebarCollapsed = Settings.sidebarCollapsed
+    /// 窗口容器（buildWindow 里的局部变量，收起态重绑约束需要引用）
+    private weak var rootContainer: NSView?
+    /// 折叠按钮的两条位置约束：展开态贴左栏右缘，收起态贴返回按钮左侧
+    private var sidebarBtnTrailingEdge: NSLayoutConstraint?
+    private var sidebarBtnTrailingInline: NSLayoutConstraint?
+    /// 左栏收起态约束：把左栏宽度压到 0 并把中栏左缘贴到窗口左边
+    private var sidebarCollapsedWidth: NSLayoutConstraint?
+    private var sidebarCollapsedMiddleLeading: NSLayoutConstraint?
+    /// 展开态的中栏左缘约束（与收起态二选一）
+    private var sidebarMiddleLeading: NSLayoutConstraint?
+    /// 左栏拖拽条（收起时隐藏）
+    private weak var leftHandleView: NSView?
     private let collapseButton = CircleGlassButton()
     /// 返回上一级目录（仅在子文件夹内可见）
     private let backButton = CircleGlassButton()
@@ -1573,6 +1598,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 整个面板都是拖放目标
         let container = DropZoneView()
+        // 记下来，供收起态重绑标题/按钮位置时引用（它们是 buildTopBar 里建的约束）
+        rootContainer = container
         // 底层也用 liquid glass：它是整个窗口的「底」，最实的一层。
         // 窗口透明后，这层玻璃负责模糊桌面壁纸，形成整窗的环境色基底。
         container.wantsLayer = true
@@ -1643,6 +1670,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 宽度约束先建好（后面拖拽时改 constant）
         sidebarWidthConstraint = sidebar.widthAnchor.constraint(equalToConstant: sidebarWidth)
+        // 收起态的两条备用约束：左栏宽度归零、中栏贴窗口左边。
+        // 与 sidebarWidthConstraint / middle.leading 二选一，靠激活状态切换。
+        sidebarCollapsedWidth = sidebar.widthAnchor.constraint(equalToConstant: 0)
+        sidebarCollapsedMiddleLeading = middle.leadingAnchor.constraint(
+            equalTo: container.leadingAnchor, constant: 8)
         rightWidthConstraint = right.widthAnchor.constraint(equalToConstant: rightWidth)
         rightTrailingConstraint = right.trailingAnchor.constraint(
             equalTo: container.trailingAnchor, constant: -8)
@@ -1845,6 +1877,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 用户点界面任何地方都像在触碰输入框（反馈的「太容易触发」）。
         w.initialFirstResponder = nil
         installClickToEndEditing()
+        // 应用上次的折叠状态（不带动画，避免启动时抖一下）
+        applySidebarCollapse(animated: false)
         w.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
@@ -1994,7 +2028,35 @@ final class PassthroughImageView: NSImageView {
 /// 事件被子视图吃掉、按钮收不到，表现为「点了没反应」。
 /// 注意**不要**覆盖按钮自身的 hitTest —— 那会破坏 NSButton 的追踪逻辑。
 final class CircleGlassButton: NSButton {
-    var diameter: CGFloat = 34
+    /// 直径。变更后要同步 backing 的尺寸约束 ——
+    /// 那两条约束在 common() 里用初始值建好，之后改变量不会自动跟随，
+    /// 表现为「不管传多少，按钮始终是初始那一个尺寸」（看起来就不是正圆）。
+    var diameter: CGFloat = 34 {
+        didSet {
+            backingWidth?.constant = diameter
+            backingHeight?.constant = diameter
+        }
+    }
+
+    private var backingWidth: NSLayoutConstraint?
+    private var backingHeight: NSLayoutConstraint?
+
+    /// 是否画玻璃底。展开态的左栏折叠按钮要「只有图标」——
+    /// 贴在面板内部时它不需要自成一个容器，多一块底反而像多出来的控件。
+    var showsGlass = true {
+        didSet { backing.isHidden = !showsGlass }
+    }
+
+    /// 是否画那圈 42% 白描边。
+    /// 左栏折叠按钮在展开态要求不显示描边（它贴在面板内部，不需要额外轮廓）。
+    var showsBorder = true {
+        didSet {
+            backing.layer?.borderWidth = showsBorder ? 0.65 : 0
+            backing.layer?.borderColor = showsBorder
+                ? NSColor.white.withAlphaComponent(0.42).cgColor
+                : NSColor.clear.cgColor
+        }
+    }
 
     private let backing = PassthroughEffectView()
     private let iconView = PassthroughImageView()
@@ -2031,11 +2093,13 @@ final class CircleGlassButton: NSButton {
         iconView.contentTintColor = .white
         addSubview(iconView)
 
+        backingWidth = backing.widthAnchor.constraint(equalToConstant: diameter)
+        backingHeight = backing.heightAnchor.constraint(equalToConstant: diameter)
         NSLayoutConstraint.activate([
             backing.centerXAnchor.constraint(equalTo: centerXAnchor),
             backing.centerYAnchor.constraint(equalTo: centerYAnchor),
-            backing.widthAnchor.constraint(equalToConstant: diameter),
-            backing.heightAnchor.constraint(equalToConstant: diameter),
+            backingWidth!,
+            backingHeight!,
 
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -2172,6 +2236,31 @@ final class CircleGlassButton: NSButton {
             equalTo: bar.leadingAnchor, constant: 700)
         searchPlaceholderConstraint.priority = .init(250)
         // ── 圆形按钮：返回 / 列数 / 样式 / 搜索 / 加号 / 齿轮 / 折叠 ──
+        styleCircleButton(sidebarCollapseButton, symbol: "sidebar.left",
+                          tooltip: L10n.t("win.toggleSidebar"))
+        sidebarCollapseButton.target = self
+        sidebarCollapseButton.action = #selector(toggleSidebarPane)
+        // 折叠按钮不放进 titleRow：展开态它要待在左栏面板右上角（照片 App 的位置），
+        // 收起态才移到返回按钮左侧。放进 stack 就只能在同一个地方。
+        //
+        // 挂到 rootContainer（与 sidebar 同级）而不是 bar：
+        // bar 是 container 的子视图、sidebar 也是，跨这两层建约束虽然合法，
+        // 但会让布局求解变复杂、实测导致整个窗口白屏。
+        bar.addSubview(sidebarCollapseButton)
+        sidebarBtnTrailingInline = sidebarCollapseButton.trailingAnchor.constraint(
+            equalTo: backButton.leadingAnchor, constant: -8)
+        // 展开态贴在左栏面板右上角。
+        // 不用 sidebar.trailingAnchor —— 按钮在 bar 里、sidebar 在 container 里，
+        // 跨层约束虽然合法，但与左栏的宽度约束互相牵制，实测会让整个窗口布局失败（白屏）。
+        // 改成直接用左栏几何算出位置：左栏左内缩 8 + 宽度 - 按钮内缩 10。
+        sidebarBtnTrailingEdge = sidebarCollapseButton.trailingAnchor.constraint(
+            equalTo: bar.leadingAnchor, constant: 8 + 200 - 10)
+        NSLayoutConstraint.activate([
+            sidebarBtnTrailingEdge!,
+            sidebarCollapseButton.centerYAnchor.constraint(
+                equalTo: bar.topAnchor, constant: 30),
+        ])
+
         styleCircleButton(backButton, symbol: "chevron.left",
                           tooltip: L10n.t("top.back"))
         backButton.target = self
@@ -2250,9 +2339,17 @@ final class CircleGlassButton: NSButton {
         self.topBarHost = bar
         self.topSubtitle = subtitle
 
+        // 标题行的左缘约束必须**存进 titleLeadingConstraint** 再激活。
+        //
+        // 之前这条是匿名建在 activate([...]) 里的，rebindTitleToSidebar()
+        // 停用的是 titleLeadingConstraint（此时仍为 nil），于是这条占位约束
+        // 始终生效、与后来新建的那条同时约束左缘 —— 两条冲突时 Auto Layout
+        // 会挑一个满足，表现就是「展开态正常、收起态两个按钮叠在一起」。
+        titleLeadingConstraint = titleRow.leadingAnchor.constraint(
+            equalTo: bar.leadingAnchor, constant: 200)
+        titleLeadingConstraint?.isActive = true
+
         NSLayoutConstraint.activate([
-            // 标题行：初始占位，稍后 rebindTitle 会绑到左栏右缘
-            titleRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 200),
             // 浮栏内容垂直位置：47 → 22（上移 25）→ 30（下移 8）
             titleRow.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 30),
 
@@ -5594,6 +5691,48 @@ final class CircleGlassButton: NSButton {
         }
     }
 
+    /// 收起 / 展开左栏。
+    ///
+    /// 只切两条约束：左栏宽度、中栏左缘。
+    /// 两者放在同一个动画块里过渡，才不会有「框先缩、内容后跳」的错位。
+    @objc private func toggleSidebarPane() {
+        sidebarCollapsed.toggle()
+        Settings.sidebarCollapsed = sidebarCollapsed
+        applySidebarCollapse(animated: true)
+    }
+
+    private func applySidebarCollapse(animated: Bool) {
+        sidebarWidthConstraint.isActive = !sidebarCollapsed
+        sidebarCollapsedWidth?.isActive = sidebarCollapsed
+        sidebarMiddleLeading?.isActive = !sidebarCollapsed
+        sidebarCollapsedMiddleLeading?.isActive = sidebarCollapsed
+        leftHandleView?.isHidden = sidebarCollapsed
+        // 收起按钮本身也要留在可见处：绑左栏右缘的话，左栏一归零它就跑到
+        // 红绿灯底下了（用户会以为按钮消失、再也展不开）。
+        // 展开态：不画玻璃底、不画描边 —— 只留一个图标，
+        // 因为它贴在面板内部、旁边就是返回按钮，自成一块容器会显得多出来一个控件。
+        // 收起态它浮在窗口背景上，需要玻璃与描边来界定。
+        sidebarCollapseButton.showsGlass = sidebarCollapsed
+        sidebarCollapseButton.showsBorder = sidebarCollapsed
+        // 展开态回左栏右上角，收起态排在返回按钮左侧
+        sidebarBtnTrailingEdge?.isActive = !sidebarCollapsed
+        sidebarBtnTrailingInline?.isActive = sidebarCollapsed
+        // 标题行的绑定目标要跟着切换，否则收起后它压在红绿灯上。
+        rebindTitleToSidebar()
+
+        if animated {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = Settings.paneAnimationDuration
+                ctx.allowsImplicitAnimation = true
+                self.window?.contentView?.layoutSubtreeIfNeeded()
+            }, completionHandler: { [weak self] in
+                self?.relayoutGridColumns()
+            })
+        } else {
+            relayoutGridColumns()
+        }
+    }
+
     /// 触发窗口重布局
     private func containerNeedsLayout() {
         NSApp.windows.first(where: { $0.frame.width > 500 })?
@@ -6294,8 +6433,23 @@ final class CircleGlassButton: NSButton {
     private func rebindTitleToSidebar() {
         guard let row = titleRowStack else { return }
         titleLeadingConstraint?.isActive = false
-        // 与网格第一列左缘对齐：sidebar.trailing + 8（中栏起点）+ 16（网格内边距）
-        let c = row.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 24)
+
+        // 左栏收起时 sidebar.trailing 会跑到窗口左缘，标题若仍绑它就会压在红绿灯上。
+        // 收起态改绑窗口容器左缘。
+        //
+        // 间距按照片 App 来：返回按钮与左栏/红绿灯之间只留 12pt，
+        // 之前用 24pt 和 148pt 都太松，看起来像两块孤立的东西。
+        let c: NSLayoutConstraint
+        if sidebarCollapsed {
+            // 收起态布局（从左到右）：红绿灯 8~76，折叠按钮紧随其后，再是返回按钮与标题。
+            // 折叠按钮是 trailing 绑 backButton.leading - 8、宽 34，
+            // 所以 row.leading = 按钮左边 + 42。要让按钮左边落在 84（红绿灯右缘 + 8），
+            // row.leading 必须 >= 126；这里取 121，即在 126 基础上按用户要求再左移 5pt。
+            c = row.leadingAnchor.constraint(equalTo: (rootContainer ?? sidebar).leadingAnchor, constant: 124)
+        } else {
+            // 展开态：紧贴左栏右缘 12pt（照片 App 也是这么紧）
+            c = row.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 12)
+        }
         c.isActive = true
         titleLeadingConstraint = c
     }
@@ -6303,6 +6457,10 @@ final class CircleGlassButton: NSButton {
     @objc private func showPanel() {
         // 从菜单栏唤出面板时，把 Dock 图标一并恢复
         NSApp.setActivationPolicy(.regular)
+        // window 声明为 NSWindow!（隐式解包）。启动早期若系统派来 reopen 事件、
+        // 而窗口还没建好，这里会直接 SIGTRAP —— 崩溃栈正是
+        // applicationShouldHandleReopen -> showPanel。必须先判空。
+        guard let window else { return }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

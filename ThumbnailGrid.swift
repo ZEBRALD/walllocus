@@ -579,7 +579,7 @@ final class ThumbnailGrid: NSView {
         layout.minimumInteritemSpacing = 10
         layout.minimumLineSpacing = 12
         // 照片是通铺布局：左右几乎不留边，右侧只给滚动条让一点
-        layout.sectionInset = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 16)
+        layout.sectionInset = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 16)
 
         collection.collectionViewLayout = layout
         collection.register(ThumbnailItem.self,
@@ -733,7 +733,7 @@ final class ThumbnailGrid: NSView {
         // 必须与 setGrid 里的 minimumInteritemSpacing / sectionInset 保持一致，
         // 否则算出来的卡片偏宽，一行塞不下第 5 个，实测只显示 4 列。
         let spacing: CGFloat = 10          // = layout.minimumInteritemSpacing
-        let insetW: CGFloat = 16           // = sectionInset.left(0) + right(16)
+        let insetW: CGFloat = 20           // = sectionInset.left(4) + right(16)
         // 卡片宽度**必须**精确等于「可用宽 / 列数」。
         //
         // FlowLayout 的判据是「这一行还塞得下吗」：卡片比这个值小一点点，
@@ -779,7 +779,7 @@ final class ThumbnailGrid: NSView {
             // 否则 FlowLayout 会按旧间距排出比预期少的列数。
             layout.minimumInteritemSpacing = 10
             layout.minimumLineSpacing = 12
-            layout.sectionInset = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 16)
+            layout.sectionInset = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 16)
             layout.invalidateLayout()
             collection.collectionViewLayout = layout
         }
@@ -793,17 +793,17 @@ final class ThumbnailGrid: NSView {
         // refreshCardSize 一个都没调到，卡片仍按旧尺寸绘制，
         // 表现就是「比例错乱、有的大有的小」，缩放一次窗口才恢复。
         updateCollectionHeight()
-        collection.layoutSubtreeIfNeeded()
-        // 重排完成后再刷新卡片。reloadData 会重建所有 item，
-        // 新的 item 在 makeItem 时已读到最新 cardSize，这里只是喂给复用中的那些。
-        collection.reloadData()
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.updateCollectionHeight()
-            for case let item as ThumbnailItem in self.collection.visibleItems() {
-                item.refreshCardSize()
-            }
+        // 不要在这里 reloadData。
+        //
+        // reloadData 会销毁并重建全部 item，动画期间每一帧都重建一次就是
+        // 「拖动左右栏或收起左栏时缩略图疯狂闪烁」的来源。
+        // 卡片尺寸变化只需让布局失效并刷新已有卡片即可，
+        // 尺寸本身是约束驱动的，item 不必重建。
+        collection.collectionViewLayout?.invalidateLayout()
+        for case let item as ThumbnailItem in collection.visibleItems() {
+            item.refreshCardSize()
         }
+        collection.layoutSubtreeIfNeeded()
     }
 
     func setGrid(columns: Int, rows: Int) {
@@ -819,7 +819,7 @@ final class ThumbnailGrid: NSView {
         layout.minimumInteritemSpacing = 10
         layout.minimumLineSpacing = 12
         // 照片是通铺布局：左右几乎不留边，右侧只给滚动条让一点
-        layout.sectionInset = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 16)
+        layout.sectionInset = NSEdgeInsets(top: 2, left: 4, bottom: 2, right: 16)
         collection.collectionViewLayout = layout
 
         // 行列数变了，每页能装的数量就变了，必须重新切片。
