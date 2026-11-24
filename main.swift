@@ -602,6 +602,12 @@ enum Settings {
     }
 
     /// 右栏宽度
+    /// 右栏是否折叠（持久化：用户收起后重启不该又展开）
+    static var detailPaneCollapsed: Bool {
+        get { UserDefaults.standard.bool(forKey: "detailPaneCollapsed") }
+        set { UserDefaults.standard.set(newValue, forKey: "detailPaneCollapsed") }
+    }
+
     static var paneDetailWidth: CGFloat {
         get {
             let v = UserDefaults.standard.double(forKey: "paneDetailWidth")
@@ -1127,6 +1133,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 右栏视图（用于判断点击是否落在右栏 —— 右栏有「应用预设」操作，
     /// 点它不该清掉预设的选中）
     private weak var detailPaneView: NSView?
+    /// 中栏容器（折叠右栏时搜索框要改绑它）
+    private weak var libraryPaneView: NSView?
+    /// 右栏左侧的拖拽条（折叠时隐藏）
+    private weak var rightHandleView: NSView?
     /// 素材名称编辑框（选中后可改名，解决 UUID 文件名认不出的问题）
     private let nameField = NSTextField(string: "")
     /// 「恢复文件名」按钮：仅在当前素材有别名时可用
@@ -1150,6 +1160,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 文件分辨率缓存（路径 → "宽x高"），避免重复异步解析导致文字闪烁
     private var resolutionCache: [String: String] = [:]
     private let settingsButton = NSButton(title: "", target: nil, action: nil)
+    /// 折叠右栏按钮：浏览大量壁纸时把操作栏收起来，让中栏独享宽度
+    private let collapseButton = NSButton(title: "", target: nil, action: nil)
+    /// 右栏是否处于折叠状态
+    private var detailCollapsed = Settings.detailPaneCollapsed
     private let addButton = NSButton(title: "", target: nil, action: nil)
     /// 顶栏的「添加壁纸」按钮（加号）
     private let addFilesButton = NSButton(title: "", target: nil, action: nil)
@@ -1172,6 +1186,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private weak var topBarHost: NSView?
     /// 右栏宽度约束
     private var rightWidthConstraint: NSLayoutConstraint!
+    /// 右栏右缘约束：折叠时把它推出窗口，中栏才能真正变宽
+    private var rightTrailingConstraint: NSLayoutConstraint!
     /// 中栏宽度约束（随左右栏变化重算）
     /// 右栏元素宽度约束（随栏宽更新）
     private var detailWidthConstraints: [NSLayoutConstraint] = []
@@ -1314,6 +1330,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         buildMenu()
         reloadScreens()
         buildWindow()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+        }
+        // 恢复上次的右栏折叠状态（必须在 buildWindow 之后，
+        // 那时 rightWidthConstraint 才存在）
+        if detailCollapsed {
+            applyDetailCollapse(animated: false)
+        }
         buildStatusItem()
         startFullscreenMonitor()
         reloadScreens()
@@ -1431,6 +1454,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
 
         let middle = buildLibraryPane()
+        libraryPaneView = middle
         let right = buildDetailPane()
         detailPaneView = right
 
@@ -1479,6 +1503,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 宽度约束先建好（后面拖拽时改 constant）
         sidebarWidthConstraint = sidebar.widthAnchor.constraint(equalToConstant: sidebarWidth)
         rightWidthConstraint = right.widthAnchor.constraint(equalToConstant: rightWidth)
+        rightTrailingConstraint = right.trailingAnchor.constraint(
+            equalTo: container.trailingAnchor, constant: -8)
         // 中栏宽度 = 窗口宽 - 左栏 - 右栏 - 间距（12+8+8+12）
 
         // ── 栏间拖拽条 ──
@@ -1498,6 +1524,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         let rightHandle = ResizeHandle()
         rightHandle.side = .rightPane
         rightHandle.translatesAutoresizingMaskIntoConstraints = false
+        rightHandleView = rightHandle
         rightHandle.onDrag = { [weak self] dx in
             guard let self else { return }
             // 右栏向右拖 = 变窄，所以取反
@@ -1565,7 +1592,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 右栏在顶栏浮层下方开始，留出可见的缝
             // 与左栏同高：顶栏已无背景，不再需要让位
             right.topAnchor.constraint(equalTo: container.topAnchor, constant: 84),
-            right.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            rightTrailingConstraint,
             rightWidthConstraint,
 
             // ── 拖拽条：贴在栏间缝隙上 ──
@@ -1781,8 +1808,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         searchField.action = #selector(searchChanged)
         searchField.translatesAutoresizingMaskIntoConstraints = false
 
+        // 占位约束：只在「还没绑定到右栏左缘」的极短时间里起作用。
+        // 优先级必须低 —— 它是个固定 700pt 的偏移，一行加到右边那串
+        // 按钮的约束上，总和会超出窗口宽度；折叠右栏后更明显：
+        // 三个按钮被整条推到窗口外，用户再也点不到它们（实测如此）。
         searchPlaceholderConstraint = searchField.leadingAnchor.constraint(
             equalTo: bar.leadingAnchor, constant: 700)
+        searchPlaceholderConstraint.priority = .init(250)
         // 添加壁纸（加号）：与齿轮同款样式
         addFilesButton.image = NSImage(systemSymbolName: "plus",
                                        accessibilityDescription: L10n.t("win.addFiles"))
@@ -1799,11 +1831,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         settingsButton.action = #selector(showSettingsMenu)
         settingsButton.translatesAutoresizingMaskIntoConstraints = false
 
+        collapseButton.image = NSImage(systemSymbolName: "sidebar.right",
+                                       accessibilityDescription: nil)
+        collapseButton.bezelStyle = .rounded
+        collapseButton.target = self
+        collapseButton.action = #selector(toggleDetailPane)
+        collapseButton.toolTip = L10n.t("win.toggleDetail")
+        collapseButton.translatesAutoresizingMaskIntoConstraints = false
+
         bar.addSubview(title)
         bar.addSubview(subtitle)
         bar.addSubview(searchField)
         bar.addSubview(settingsButton)
         bar.addSubview(addFilesButton)
+        bar.addSubview(collapseButton)
         self.topTitle = title
         self.topTitleView = title
         self.topBarHost = bar
@@ -1819,10 +1860,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             subtitle.centerYAnchor.constraint(equalTo: bar.topAnchor,
                                                 constant: 47 + 9),
 
-            settingsButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
             settingsButton.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 47),
             settingsButton.widthAnchor.constraint(equalToConstant: 30),
             settingsButton.heightAnchor.constraint(equalToConstant: 28),
+
+            // 折叠按钮：最右，与齿轮同尺寸
+            // 绑 topBar 自己的右缘即可：topBar 横跨整窗（leading/trailing 都
+            // 绑 container），所以无论右栏展开还是折叠，这个位置都不变。
+            // 关键是不能让它随「搜索框 + 右栏」那条链算出来 ——
+            // 折叠时右栏移出窗口，链条一变按钮就被推出可视区，用户再也展不开。
+            collapseButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
+            collapseButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
+            collapseButton.widthAnchor.constraint(equalToConstant: 30),
+            collapseButton.heightAnchor.constraint(equalToConstant: 28),
+
+            // 齿轮排到折叠按钮左边
+            settingsButton.trailingAnchor.constraint(equalTo: collapseButton.leadingAnchor, constant: -8),
 
             // 加号按钮：与齿轮同尺寸、同高度，排在它左边
             addFilesButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -8),
@@ -4786,6 +4839,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
     }
 
+    /// 折叠/展开右栏。
+    ///
+    /// 浏览大量壁纸时右栏一直占着 300pt，把它收起来中栏能多显示一列。
+    /// 折叠状态持久化 —— 用户既然选了更大的浏览区，重启后不该又变回去。
+    @objc private func toggleDetailPane() {
+        detailCollapsed.toggle()
+        Settings.detailPaneCollapsed = detailCollapsed
+        applyDetailCollapse(animated: false)
+    }
+
+    /// 把折叠状态应用到布局上
+    private func applyDetailCollapse(animated: Bool) {
+        if detailCollapsed {
+            // 关键：把右栏整体推出窗口右缘，而不是只把宽度设成 0。
+            // 只设宽度的话，中栏的 trailing 仍绑在 right.leading 上、
+            // 而 right.trailing 固定在 container 右缘，中栏反而被挤压，
+            // 结果按钮被推到窗口外、网格也没变宽（实测如此）。
+            rightWidthConstraint.constant = rightWidth
+            rightTrailingConstraint.constant = rightWidth + 16
+        } else {
+            rightWidthConstraint.constant = rightWidth
+            rightTrailingConstraint.constant = -8
+        }
+        detailPaneView?.isHidden = detailCollapsed
+        // 折叠时不显示分隔拖拽条，避免在 0 宽位置上误拖
+        rightHandleView?.isHidden = detailCollapsed
+        collapseButton.image = NSImage(
+            systemSymbolName: detailCollapsed ? "sidebar.right" : "sidebar.right",
+            accessibilityDescription: nil)
+        collapseButton.contentTintColor = detailCollapsed ? .secondaryLabelColor : nil
+        // 搜索框的左缘原本绑在右栏左缘上。折叠后右栏被推出窗口，
+        // 那条链会把搜索框和它右边的三个按钮一起拖出可视区 ——
+        // 表现为「折叠后顶栏按钮全不见了，再也展不开」。
+        // 折叠时改绑中栏右缘，展开时绑回右栏。
+        rebindTitleToSidebar()
+
+        containerNeedsLayout()
+        // 中栏宽度变了，列数要重算
+        DispatchQueue.main.async { [weak self] in
+            self?.relayoutGridColumns()
+            self?.syncDetailDocSize()
+        }
+    }
+
+    /// 触发窗口重布局
+    private func containerNeedsLayout() {
+        NSApp.windows.first(where: { $0.frame.width > 500 })?
+            .contentView?.needsLayout = true
+    }
+
     /// 播放速度：属于「屏 × 素材」的属性，只影响当前选中的这项。
     @objc private func rateChanged() {
         let idx = rateControl.selectedSegment
@@ -5482,9 +5585,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         // 搜索框左缘贴右栏左缘（+12 与右栏面板内缩对齐），
         // 但现在右侧多了加号按钮，搜索框要往左缩一个按钮位。
-        if let pane = detailPane {
-            searchPlaceholderConstraint?.isActive = false
-            searchFieldLeftConstraint?.isActive = false
+        searchPlaceholderConstraint?.isActive = false
+        searchFieldLeftConstraint?.isActive = false
+        if detailCollapsed {
+            // 右栏收起：搜索框左缘跟随中栏右缘（中栏此时已铺到窗口右侧）
+            if let mid = libraryPaneView {
+                let sc = searchField.leadingAnchor.constraint(
+                    equalTo: mid.trailingAnchor, constant: -260)
+                sc.isActive = true
+                searchFieldLeftConstraint = sc
+            }
+        } else if let pane = detailPane {
             // 左缘贴右栏左缘（+12 与面板内缩对齐）。
             // 右侧的搜索框 trailing 已改由加号按钮决定，宽度会自动收窄，
             // 不需要再往左让位。
