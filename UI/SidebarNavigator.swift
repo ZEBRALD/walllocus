@@ -265,30 +265,53 @@ final class SidebarNavigator: NSView {
         layer?.masksToBounds = true
         layer?.backgroundColor = NSColor.clear.cgColor
 
-        // 左栏不再叠玻璃：底层已经铺满整窗并模糊了壁纸，
-        // 再套一层会让它被模糊两次、比中栏暗。
-        // 「浮起」由圆角 + 描边表达。
-        let tint = NSView()
-        tint.wantsLayer = true
-        tint.layer?.backgroundColor = NSColor.clear.cgColor
+        // 侧栏自己的材质层。
+        //
+        // 之前这里是个完全透明的 tint 视图，靠底层 baseBlur 透上来 ——
+        // 但底层的模糊是对整窗做的、强度按中栏调，侧栏因此显得「没有材质」。
+        // 参考 MeloX：侧栏用 .regularMaterial 那一档（AppKit 里是 .popover），
+        // 只柔化、不压暗，才能真正呈现 Liquid Glass 的观感。
+        let tint = NSVisualEffectView()
+        tint.material = .popover
+        tint.blendingMode = .withinWindow
+        tint.state = .active
         tint.translatesAutoresizingMaskIntoConstraints = false
+        tint.wantsLayer = true
+        tint.layer?.cornerRadius = 16
+        tint.layer?.masksToBounds = true
         addSubview(tint)
-        NSLayoutConstraint.activate([
-            tint.topAnchor.constraint(equalTo: topAnchor),
-            tint.leadingAnchor.constraint(equalTo: leadingAnchor),
-            tint.trailingAnchor.constraint(equalTo: trailingAnchor),
-            tint.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
 
-        // 与右栏一致的 liquid glass 描边（侧栏的玻璃是自建的，不过 addGlass）
+        // 环境染色层。
+        //
+        // MeloX 靠系统的 .glassEffect 自动取色，但 AppKit 的 .popover
+        // 没有同等能力 —— 纯材质在深色窗口上就是一块中性灰。
+        // 所以在材质之上补一层极淡的主色调，作为系统能力的替代。
+        // 颜色由 AmbientColorSampler 提供（已改成取「最饱和 15% 像素」
+        // 的平均值，比全图平均更能代表壁纸的主色）。
+        let wash = PassthroughLayerView()
+        wash.wantsLayer = true
+        wash.translatesAutoresizingMaskIntoConstraints = false
+        wash.layer?.cornerRadius = 16
+        wash.layer?.masksToBounds = true
+        addSubview(wash)
+        NSLayoutConstraint.activate([
+            wash.topAnchor.constraint(equalTo: topAnchor),
+            wash.leadingAnchor.constraint(equalTo: leadingAnchor),
+            wash.trailingAnchor.constraint(equalTo: trailingAnchor),
+            wash.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        AmbientColorSampler.shared.observe { [weak wash] c in
+            wash?.layer?.backgroundColor = c.withAlphaComponent(0.30).cgColor
+        }
+
+        // 描边：固定极淡白线（MeloX 的做法）。
+        // 玻璃的染色交给 wash 层，描边始终是这条恒定的白线 ——
+        // 早期让描边跟着壁纸变色，边界反而看不清。
+        //
+        // 注意：必须在 wash 之后添加，否则会被染色层盖住。
         let rim = GlassRimView()
         rim.cornerRadius = 16
-        // 描边随环境色变化：采样面板左上方一小块背景，染色到边框上。
-        // 底色保持不变，只有边框跟着冷暖走（Vorssaint 的效果）。
-        AmbientColorSampler.shared.onChange = { [weak rim] c in
-            rim?.ambientColor = c
-        }
-        rim.ambientColor = AmbientColorSampler.shared.color
+        rim.usesFixedWhiteStroke = true
         rim.translatesAutoresizingMaskIntoConstraints = false
         addSubview(rim)
         NSLayoutConstraint.activate([
@@ -297,7 +320,6 @@ final class SidebarNavigator: NSView {
             rim.trailingAnchor.constraint(equalTo: trailingAnchor),
             rim.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-
 
         outline.headerView = nil
         outline.backgroundColor = .clear
@@ -482,6 +504,8 @@ final class SidebarNavigator: NSView {
             // 红绿灯区(40) + 标题区(56)
             // 标题已移到中栏顶部，左栏直接显示库/预设/显示器列表
             // 顶部与底部一致留 8：16 会让分组标题上方空出一大块
+            // 面板顶部已经不覆盖红绿灯（面板从 52pt 处开始），
+            // 这里只需给 logo 与第一分组之间留一点呼吸。
             scroll.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             // 横向不再内缩：让滚动条贴到面板右缘，与中栏、右栏保持一致。
             // 选中条与边缘的呼吸由 cell 自己的左右内边距承担。

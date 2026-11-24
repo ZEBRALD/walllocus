@@ -67,19 +67,20 @@ final class GradientMaskBlurView: NSView {
     private func common() {
         wantsLayer = true
 
-        // 用 .sidebar：这是 macOS 侧栏的原生材质，
-        // 它在深色外观下的表现正是「内容透出来 + 柔化」，
-        // 不带 .headerView 那层明显的灰底。
+        // 对照 MeloX（youshen2/MeloX）的实现：它的播放器条用的是 SwiftUI
+        // .glassEffect(.regular) / .regularMaterial + 一圈很淡的白色描边，
+        // 观感是「几乎不着色的柔化 + 边缘高光」，不发灰也不发白。
         //
-        // 试错记录（都失败）：
-        // - .underWindowBackground：压一层灰底，叠在窗口 baseBlur 上成灰雾
-        // - 双层 + .popover + aqua：白过头，内容被盖住，只剩白色矩形感
-        // - .headerView + alphaValue 0.78：仍是灰，且透明感不自然
+        // AppKit 里 .regularMaterial 对应的就是 .popover 这一档：
+        // 它只做柔化、不叠暗色底。之前发灰是因为给了 darkAqua 外观 ——
+        // 深色外观下系统会按深色配色压暗，材质选哪个都灰。
         blur.translatesAutoresizingMaskIntoConstraints = false
-        blur.material = .sidebar
+        blur.material = .popover
         blur.blendingMode = .withinWindow
         blur.state = .active
-        blur.appearance = NSAppearance(named: .darkAqua)
+        // 不强制 appearance：MeloX 在深色下用的是 .regularMaterial 且不覆盖",
+        // 配色方案，观感依然透亮 —— 说明关键在材质本身，不在外观。
+        // 之前强制 aqua 会白过头，正是因为外观被改成了亮色系。
         addSubview(blur)
         NSLayoutConstraint.activate([
             blur.topAnchor.constraint(equalTo: topAnchor),
@@ -92,14 +93,29 @@ final class GradientMaskBlurView: NSView {
         // 插值途中拖出一层灰，底部边界看得到一条线。
         // 过渡拉长：从 55% 处开始缓慢衰减到 100%，而不是在最后 15% 里骤降。
         // 骤降会形成一条可见的「边界线」，缓降才是照片 App 那种自然淡出。
+        // 用等距色标 + 近似线性的 alpha 递减。
+        //
+        // 之前的分布是「前 55% 几乎不变（1.0 → 0.88）、后 45% 骤降」——
+        // 观感就是「一段固定透明度 + 一段突然渐变」，中间还有可见的折点。
+        // 色标等距、alpha 每段降幅接近，才是连续过渡。
+        // 先慢后快：顶部一大段保持接近实心（托住标题、压住缩略图），
+        // 后段才开始明显衰减，最后一段收干。
+        //
+        // 等速线性看着「太淡」：整条浮栏都在半透明状态，
+        // 标题和缩略图都没有一个安静的底。照片 App 的顶栏其实很实，
+        // 只在底部一小段让内容透出来。
         gradient.colors = [
-            NSColor.white.cgColor,
-            NSColor.white.withAlphaComponent(0.88).cgColor,
-            NSColor.white.withAlphaComponent(0.52).cgColor,
-            NSColor.white.withAlphaComponent(0.18).cgColor,
-            NSColor.white.withAlphaComponent(0.0).cgColor,
+            NSColor.white.cgColor,                                   // 1.00
+            NSColor.white.withAlphaComponent(0.96).cgColor,          // 0.96
+            NSColor.white.withAlphaComponent(0.88).cgColor,          // 0.88
+            NSColor.white.withAlphaComponent(0.70).cgColor,          // 0.70
+            NSColor.white.withAlphaComponent(0.42).cgColor,          // 0.42
+            NSColor.white.withAlphaComponent(0.15).cgColor,          // 0.15
+            NSColor.white.withAlphaComponent(0.0).cgColor,           // 0.00
         ]
-        gradient.locations = [0.0, 0.55, 0.78, 0.92, 1.0]
+        // 前 45% 只降到 0.88（慢），45%~80% 降到 0.15（快），
+        // 最后 20% 收干。这是「先慢后快」的形状。
+        gradient.locations = [0.0, 0.15, 0.30, 0.45, 0.62, 0.80, 1.0]
         gradient.startPoint = CGPoint(x: 0.5, y: 1.0)
         gradient.endPoint = CGPoint(x: 0.5, y: 0.0)
         // 诊断开关：设为 true 时不加 mask，用来验证「模糊本身是否生效」。
@@ -134,8 +150,14 @@ final class GlassRimView: NSView {
     var cornerRadius: CGFloat = 16
 
     /// 环境色调（由外部注入，随壁纸/周围内容更新）。
-    /// 描边用「环境色的亮版本」，所以边框会跟着背景冷暖一起变。
     var ambientColor: NSColor = .white {
+        didSet { needsDisplay = true }
+    }
+
+    /// 是否用固定的极淡白线（MeloX 的做法）。
+    /// 开着时忽略 ambientColor —— 玻璃的染色应该由材质层做，
+    /// 而不是让边框跟着壁纸变色，那样反而看不出材质的边界。
+    var usesFixedWhiteStroke = false {
         didSet { needsDisplay = true }
     }
 
@@ -160,20 +182,22 @@ final class GlassRimView: NSView {
         // 描边颜色 = 环境色的高亮版，而不是固定白。
         // Vorssaint 的边框会随内容变色，来源就是把材质的采样结果染进描边里。
         // 这里用环境色的 HSV 提升亮度 + 少量白，保留色相。
-        let rim = Self.highlight(from: ambientColor)
-        rim.setStroke()
+        let rimColor: NSColor
+        if usesFixedWhiteStroke {
+            path.lineWidth = 1
+            rimColor = NSColor.white.withAlphaComponent(0.42)
+        } else {
+            path.lineWidth = 1
+            rimColor = Self.highlight(from: ambientColor)
+        }
+        rimColor.setStroke()
         path.stroke()
 
-        // 顶部高光：用同样色调，更淡
-        NSGraphicsContext.saveGraphicsState()
-        path.addClip()
-        var top = Self.highlight(from: ambientColor)
-        top = top.withAlphaComponent(0.5)
-        let grad = NSGradient(colors: [top, top.withAlphaComponent(0)])
-        grad?.draw(in: NSRect(x: 0, y: bounds.height * 0.65,
-                              width: bounds.width, height: bounds.height * 0.35),
-                   angle: -90)
-        NSGraphicsContext.restoreGraphicsState()
+        // 顶部白色渐变高光已移除。
+        //
+        // 那是早期照 Vorssaint 做的「玻璃上缘反光」，在实际界面里表现为
+        // 面板顶部一条明显的白色渐变色带，与 MeloX/照片 App 那种克制的
+        // 材质不符。原生质感的边界只需要那圈 1pt 描边，不需要额外的高光层。
     }
 
     /// 由环境色推导描边色：保留色相，只提亮。
@@ -267,7 +291,13 @@ final class AmbientColorSampler {
 
     private var timer: Timer?
     private(set) var color: NSColor = .white
-    var onChange: ((NSColor) -> Void)?
+    /// 多个订阅者（左栏、右栏各一份）。原先只有一个闭包槽，
+    /// 右栏赋值会把左栏的覆盖掉，表现为「只有一栏被染色」。
+    private var observers: [(NSColor) -> Void] = []
+    func observe(_ handler: @escaping (NSColor) -> Void) {
+        observers.append(handler)
+        handler(color)
+    }
 
     /// 采样点（屏幕坐标）：面板附近的几个位置取平均
     private var samplePoints: [CGPoint] = []
@@ -332,13 +362,19 @@ final class AmbientColorSampler {
             g += Double(data[i * 4 + 1])
             b += Double(data[i * 4 + 2])
         }
+        // 退回全图平均色。
+        //
+        // 试过两种更强的方案都失败：
+        // - 放大饱和度 ×3.2 → 把壁纸的色偏一起放大，整窗泛绿
+        // - 只取最饱和 15% 像素 → 边缘色被选中，左右栏发蓝
+        // 平均色虽然淡，但它至少是「这张图整体偏什么色」的诚实表达。
         let n = Double(w * h)
         let c = NSColor(srgbRed: CGFloat(r / n / 255),
                         green: CGFloat(g / n / 255),
                         blue: CGFloat(b / n / 255),
                         alpha: 1)
         color = c
-        onChange?(c)
+        for h in observers { h(c) }
     }
 }
 
@@ -1568,33 +1604,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
 
 
-        // logo：红绿灯 → logo → 左栏面板 三层纵向排列。
-        // 放在 container 上而不是 topBar 里 —— topBar 只覆盖中栏+右栏，
-        // 它的左侧不属于任何区域，放进去就看不见了。
-        // 品牌区：logo + 软件名，横向一排，位于红绿灯下方、左栏面板上方
-        let logo = NSImageView()
-        logo.image = NSApp.applicationIconImage
-        logo.imageScaling = .scaleProportionallyUpOrDown
-        logo.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(logo)
-
-        let brand = NSTextField(labelWithString: "WallLocus")
-        brand.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
-        brand.textColor = .labelColor
-        brand.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(brand)
-
-        NSLayoutConstraint.activate([
-            logo.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            logo.centerYAnchor.constraint(equalTo: container.topAnchor, constant: 34 + 15),
-            logo.widthAnchor.constraint(equalToConstant: 26),
-            logo.heightAnchor.constraint(equalToConstant: 26),
-
-            brand.leadingAnchor.constraint(equalTo: logo.trailingAnchor, constant: 8),
-            brand.centerYAnchor.constraint(equalTo: logo.centerYAnchor),
-            brand.trailingAnchor.constraint(lessThanOrEqualTo: container.leadingAnchor,
-                                            constant: 200),
-        ])
 
         // 宽度约束先建好（后面拖拽时改 constant）
         sidebarWidthConstraint = sidebar.widthAnchor.constraint(equalToConstant: sidebarWidth)
@@ -1649,10 +1658,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 跨视图约束若在 sidebar 加入层级前建立会崩。
         rebindTitleToSidebar()
 
-        // 顶栏通栏后会盖住品牌区（logo + 名字），把品牌区提到最前，
-        // 让它在渐变浮层之上显示。
-        container.addSubview(logo, positioned: .above, relativeTo: topBar)
-        container.addSubview(brand, positioned: .above, relativeTo: logo)
 
         NSLayoutConstraint.activate([
             // 顶栏通栏：从左到右贯穿整个窗口。
@@ -1676,7 +1681,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 不再依赖窗口背景，因此内缩是安全的。
             // 纵向三层：红绿灯(y8-24) → logo → 左栏面板
             // 左上角 12pt 边距由 logo 与面板共同体现
-            sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 84),
+            // 面板内缩 8pt，与红绿灯的 8pt 偏置一致。
+            //
+            // 红绿灯由系统钉在距窗口左/上各 8pt 处。面板也从 8pt 开始后，
+            // 按钮中心落在面板内的 (8,8)，距面板圆角圆心 (24,24) 约 11.3pt，
+            // 小于圆角半径 16 —— 即按钮整个在圆角内部，不会被裁掉。
+            // 之前误以为会被切而把面板顶到 0，结果按钮贴死了窗口边、没有留白。
+            sidebar.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
             sidebar.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
             // 宽度可变：由拖拽条调整（约束存在属性里，拖动时改 constant）
             sidebarWidthConstraint,
@@ -1723,6 +1734,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         w.contentMaxSize = NSSize(width: 10000, height: 10000)
 
         w.delegate = self
+        // 系统按钮位置就绪后再调（buildWindow 末尾会被布局重置，故延迟一轮）
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.alignTrafficLights(w)
+        }
         window = w
 
         // 窗口可缩放：列数随宽度变化，需要监听
@@ -2161,17 +2177,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 右栏：比中栏略实一点，因为它承载控件、需要更好的可读性
         // 右栏：独立圆角面板，用 .sidebar 材质做 liquid glass
         // 右栏：中等层——比左栏透一点，但比中栏实（承载滑块输入框）
-        // 右栏也不叠玻璃：与左栏、中栏共用同一块底层玻璃，
-        // 只靠圆角 + 描边 + 极淡 tint 表达「浮起」。
         pane.wantsLayer = true
-        let rightTint = PassthroughLayerView()
-        rightTint.wantsLayer = true
-        rightTint.layer?.backgroundColor = NSColor.clear.cgColor
+        // 与左栏一致的材质层：.popover ≈ SwiftUI 的 .regularMaterial，
+        // 只柔化、不压暗。此前这里是个透明视图，靠底层 baseBlur 透上来，
+        // 结果右栏看起来「没有材质」，与左栏也不统一。
+        let rightTint = NSVisualEffectView()
+        rightTint.material = .popover
+        rightTint.blendingMode = .withinWindow
+        rightTint.state = .active
         rightTint.translatesAutoresizingMaskIntoConstraints = false
         rightTint.wantsLayer = true
         rightTint.layer?.cornerRadius = 16
         rightTint.layer?.masksToBounds = true
         pane.addSubview(rightTint)
+
+        // 与左栏一致的环境染色层（AppKit 材质不会自己取色，需补这一层）。
+        let rightWash = PassthroughLayerView()
+        rightWash.wantsLayer = true
+        rightWash.translatesAutoresizingMaskIntoConstraints = false
+        rightWash.layer?.cornerRadius = 16
+        rightWash.layer?.masksToBounds = true
+        pane.addSubview(rightWash)
+        NSLayoutConstraint.activate([
+            rightWash.topAnchor.constraint(equalTo: pane.topAnchor),
+            rightWash.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            rightWash.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            rightWash.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
+        ])
+        AmbientColorSampler.shared.observe { [weak rightWash] c in
+            rightWash?.layer?.backgroundColor = c.withAlphaComponent(0.30).cgColor
+        }
         NSLayoutConstraint.activate([
             rightTint.topAnchor.constraint(equalTo: pane.topAnchor),
             rightTint.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
@@ -6011,6 +6046,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // ①窗口拖不到 Dock 下面（visibleFrame 已经把 Dock 扣掉了）；
         // ②换屏时还会被强制改高度，表现为「UI 自己往上跳」。
         // 新布局是可自由缩放的固定尺寸窗口，位置与大小完全交给用户。
+    }
+
+    /// 把系统红绿灯往里挪，避开侧栏面板的圆角。
+    ///
+    /// 系统默认把三个按钮钉在距窗口左/上各 8pt 处，而侧栏面板也从 8pt 起、
+    /// 圆角 16 —— 按钮外角到圆角圆心 22.6pt > 16，正好压在弧线上被切。
+    /// 面板位置不能动（动了就没有边距），所以只能把按钮本身往内移。
+    /// 移到距边 16pt 后，外角到圆心 11.3pt < 16，完整落在圆角内。
+    private func alignTrafficLights(_ window: NSWindow) {
+        guard let close = window.standardWindowButton(.closeButton),
+              let mini = window.standardWindowButton(.miniaturizeButton),
+              let zoom = window.standardWindowButton(.zoomButton),
+              let container = close.superview else { return }
+
+        // 水平 +8、垂直 -8：让三个按钮整体移到 (16,16) 附近，
+        // 与面板圆角（半径 16、起点 8）保持均匀距离。
+        // 只下移不动横向的话，第一个按钮仍贴着左侧弧线，看起来「挤在角上」。
+        let dx: CGFloat = 8
+        let dy: CGFloat = 8
+        for b in [close, mini, zoom] {
+            b.setFrameOrigin(NSPoint(x: b.frame.origin.x + dx,
+                                     y: b.frame.origin.y - dy))
+        }
+        _ = container
     }
 
     func windowWillClose(_ notification: Notification) {
