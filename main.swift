@@ -41,6 +41,88 @@ enum MediaKind: String, Codable {
 /// 玻璃面板的描边：沿圆角画一圈渐变高光。
 /// 上边偏亮、下边偏暗，模拟光线自上方入射时的边缘折射，
 /// 这是 macOS liquid glass 面板能在深色底上「浮起来」的关键。
+/// 带渐变淡出的模糊层。
+///
+/// 关键限制：NSVisualEffectView 的背景模糊由窗口服务器合成，
+/// 它**不经过视图自己的 layer 绘制**，所以给 blur 层加 layer.mask 是无效的 ——
+/// mask 只能裁掉视图自己画的内容（这里是空），裁不掉背后的模糊。
+/// 这正是「怎么调都是透明矩形、看不到模糊」的真正原因。
+///
+/// 可靠做法：把 blur 放进一个普通容器，用容器的 layer.mask 裁整个子树。
+/// 容器是真图层，mask 对子树生效，模糊才会跟着淡出。
+final class GradientMaskBlurView: NSView {
+    private let blur = NSVisualEffectView()
+    private let gradient = CAGradientLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        common()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        common()
+    }
+
+    private func common() {
+        wantsLayer = true
+
+        // 用 .sidebar：这是 macOS 侧栏的原生材质，
+        // 它在深色外观下的表现正是「内容透出来 + 柔化」，
+        // 不带 .headerView 那层明显的灰底。
+        //
+        // 试错记录（都失败）：
+        // - .underWindowBackground：压一层灰底，叠在窗口 baseBlur 上成灰雾
+        // - 双层 + .popover + aqua：白过头，内容被盖住，只剩白色矩形感
+        // - .headerView + alphaValue 0.78：仍是灰，且透明感不自然
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        blur.material = .sidebar
+        blur.blendingMode = .withinWindow
+        blur.state = .active
+        blur.appearance = NSAppearance(named: .darkAqua)
+        addSubview(blur)
+        NSLayoutConstraint.activate([
+            blur.topAnchor.constraint(equalTo: topAnchor),
+            blur.leadingAnchor.constraint(equalTo: leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: trailingAnchor),
+            blur.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        // 末尾是 alpha 0 的白而非 clear：clear 会被当成「黑 + 0 alpha」，
+        // 插值途中拖出一层灰，底部边界看得到一条线。
+        // 过渡拉长：从 55% 处开始缓慢衰减到 100%，而不是在最后 15% 里骤降。
+        // 骤降会形成一条可见的「边界线」，缓降才是照片 App 那种自然淡出。
+        gradient.colors = [
+            NSColor.white.cgColor,
+            NSColor.white.withAlphaComponent(0.88).cgColor,
+            NSColor.white.withAlphaComponent(0.52).cgColor,
+            NSColor.white.withAlphaComponent(0.18).cgColor,
+            NSColor.white.withAlphaComponent(0.0).cgColor,
+        ]
+        gradient.locations = [0.0, 0.55, 0.78, 0.92, 1.0]
+        gradient.startPoint = CGPoint(x: 0.5, y: 1.0)
+        gradient.endPoint = CGPoint(x: 0.5, y: 0.0)
+        // 诊断开关：设为 true 时不加 mask，用来验证「模糊本身是否生效」。
+        // 如果去掉 mask 仍看不到模糊，那问题不在遮罩，而在采样模式。
+        if !Self.disableMaskForDiagnosis {
+            layer?.mask = gradient
+        }
+    }
+
+    /// 临时诊断用：绕开遮罩，直接看纯模糊
+    static var disableMaskForDiagnosis = false
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradient.frame = bounds
+        CATransaction.commit()
+    }
+
+    var sharedGradient: CAGradientLayer { gradient }
+}
+
 /// 纯装饰层：铺满容器但不接收任何鼠标事件。
 /// 用它替代裸 NSView 做 tint / 描边 / 背景，避免「盖住控件导致点不动」。
 final class PassthroughLayerView: NSView {
@@ -1135,6 +1217,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private weak var detailPaneView: NSView?
     /// 中栏容器（折叠右栏时搜索框要改绑它）
     private weak var libraryPaneView: NSView?
+    /// 中栏顶部的渐变模糊浮栏（标题「文件夹名 + 数量」放这里）
+    private weak var libraryHeaderBlur: NSVisualEffectView?
+    /// 浮栏的渐变遮罩：上实下透，让网格内容从中穿过时自然隐去
+    private weak var libraryHeaderMask: CAGradientLayer?
+    /// 顶栏通栏的渐变模糊底（含右栏区域）
+    private weak var topBarBlur: GradientMaskBlurView?
+    private weak var topBarMask: CAGradientLayer?
+    /// 浮栏里的标题与副标题
+    private weak var libraryHeaderTitle: NSTextField?
+    private weak var libraryHeaderSubtitle: NSTextField?
     /// 右栏左侧的拖拽条（折叠时隐藏）
     private weak var rightHandleView: NSView?
     /// 素材名称编辑框（选中后可改名，解决 UUID 文件名认不出的问题）
@@ -1188,6 +1280,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var rightWidthConstraint: NSLayoutConstraint!
     /// 右栏右缘约束：折叠时把它推出窗口，中栏才能真正变宽
     private var rightTrailingConstraint: NSLayoutConstraint!
+    /// 中栏右缘：展开时贴右栏，折叠时贴窗口右缘
+    private var middleTrailingConstraint: NSLayoutConstraint!
+    /// 折叠态下使用的备用约束（贴 container 右缘）
+    private var middleTrailingCollapsed: NSLayoutConstraint?
     /// 中栏宽度约束（随左右栏变化重算）
     /// 右栏元素宽度约束（随栏宽更新）
     private var detailWidthConstraints: [NSLayoutConstraint] = []
@@ -1505,6 +1601,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         rightWidthConstraint = right.widthAnchor.constraint(equalToConstant: rightWidth)
         rightTrailingConstraint = right.trailingAnchor.constraint(
             equalTo: container.trailingAnchor, constant: -8)
+        middleTrailingConstraint = middle.trailingAnchor.constraint(
+            equalTo: right.leadingAnchor, constant: -8)
+        // 折叠时中栏右缘要留出与展开态相同的呼吸空间。
+        // 用 0 会让网格的 scroll（trailing 已外扩 8）把滚动条推到窗口外 ——
+        // 表现成「滚动条不见了 / 挤在看不见的右侧」。
+        middleTrailingCollapsed = middle.trailingAnchor.constraint(
+            equalTo: container.trailingAnchor, constant: -8)
         // 中栏宽度 = 窗口宽 - 左栏 - 右栏 - 间距（12+8+8+12）
 
         // ── 栏间拖拽条 ──
@@ -1583,7 +1686,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // ── 中栏：通铺，不圆角、不内缩 ──
             middle.topAnchor.constraint(equalTo: container.topAnchor),
             middle.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 8),
-            middle.trailingAnchor.constraint(equalTo: right.leadingAnchor, constant: -8),
+            middleTrailingConstraint,
             middle.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             // 中栏宽度 = 窗口宽 - 左栏 - 右栏 - 所有间距
             // 用精确约束而非 >=，否则拖宽右栏时总宽溢出会把窗口撑大
@@ -1774,20 +1877,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func buildTopBar() -> NSView {
         let bar = NSView()
         bar.translatesAutoresizingMaskIntoConstraints = false
-        // 顶栏只是一个透明浮层：不再铺模糊/压暗。
-        // 内容（标题、搜索、齿轮）直接浮在图库之上。
         bar.wantsLayer = true
+
+        // 顶栏自带渐变模糊底：横跨整个窗口（含右栏区域），
+        // 这样搜索/加号/齿轮/折叠这些控件浮在同一条模糊带上，
+        // 而不是各自飘在透明背景里。
+        //
+        // 它还解决了另一个问题：右栏折叠后，右栏顶部会露出一块没有模糊的区域，
+        // 与中栏的浮栏形成割裂 —— 顶栏通栏模糊之后那块也被覆盖。
+        // 用自同步渐变层：遮罩在 layout() 里永远与自身等大。
+        // 之前手工调 syncTopBarMask() 只在 refreshControls 里跑过一次，
+        // 那时顶栏还没布局完（bounds 为 0），遮罩停在 0x0，
+        // 所有模糊都被裁掉，看起来就只剩一层薄底色。
+        // 顶栏不再自建模糊层：模糊必须放在中栏内部才能采到缩略图
+        // （见 buildLibraryPane 里的 headerBlur）。
+        // 这里只保留文字与按钮，它们的底由中栏那层模糊透上来。
+
+        // 不再叠任何 tint。
+        //
+        // 之前用白色半透明矩形做「提亮」，那本质上仍是一个白方框盖上去，
+        // 模糊被它冲淡成灰雾 —— 看起来像「透明度渐变」而不是「模糊渐变」。
+        // 真正的做法只有一条：让 NSVisualEffectView 自己模糊，
+        // 用渐变遮罩控制模糊可见的范围，中间不插任何实色层。
 
         // 标题：当前分类 + 素材数（浮在图库之上，无背景）
         let title = NSTextField(labelWithString: "")
 
         title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        // 白底只有 55% 透明度，叠在深色模糊层上整体仍是深灰，
+        // 深色文字在这个底上对比不足、糊成一片。
+        // 用浅色文字 + 更实的白底，既亮又清楚。
+        title.textColor = NSColor.white.withAlphaComponent(0.98)
+        // 模糊后的底色不可控（缩略图有亮有暗），白字落在浅色图上会失对比。
+        // 加一层极淡的深色阴影做兜底 —— 比再叠一层实色背景轻得多，
+        // 也不会把模糊重新盖成灰雾。
+        title.shadow = Self.headerTextShadow()
         title.lineBreakMode = .byTruncatingTail
         title.translatesAutoresizingMaskIntoConstraints = false
 
         let subtitle = NSTextField(labelWithString: "")
         subtitle.font = NSFont.systemFont(ofSize: 11)
-        subtitle.textColor = .secondaryLabelColor
+        subtitle.textColor = NSColor.white.withAlphaComponent(0.72)
+        subtitle.shadow = Self.headerTextShadow()
         subtitle.lineBreakMode = .byTruncatingTail
         subtitle.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1955,16 +2086,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         emptyCard.isHidden = true
         libraryEmptyLabel = emptyCard
 
+        // 中栏顶部不再自建模糊带：顶栏已经通栏覆盖了整个窗口宽度，
+        // 再叠一层就是两层模糊叠在一起，交界处会明显变暗。
+        // 标题改由顶栏承载（见 buildTopBar 里的 libraryTitle）。
+
         // 导入进行中的浮标：压在中栏右上角，不参与布局，
         // 因此不会挤动网格；导入结束后消失，不留下空位。
         let banner = makeImportBanner()
         importBanner = banner
 
-        for v in [toolbar, thumbnailGrid, emptyCard, banner] { pane.addSubview(v) }
+        // 顶栏模糊必须放在**中栏内部**、网格之上。
+        //
+        // NSVisualEffectView 只采样同一图层树中、位于它之下的内容。
+        // 顶栏和中栏是兄弟视图，放在顶栏里的模糊看不到中栏的缩略图 ——
+        // 实测：去掉遮罩后顶栏依然完全不模糊，证明问题在采样范围而非遮罩。
+        // 放进中栏后，它下面的网格就是可见的采样源。
+        let headerBlur = GradientMaskBlurView()
+        headerBlur.translatesAutoresizingMaskIntoConstraints = false
+        libraryHeaderBlur = headerBlur as? NSVisualEffectView
+        libraryHeaderMask = headerBlur.sharedGradient
+
+        for v in [toolbar, thumbnailGrid, emptyCard, banner, headerBlur] { pane.addSubview(v) }
 
         NSLayoutConstraint.activate([
             banner.topAnchor.constraint(equalTo: pane.topAnchor, constant: 12),
             banner.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -20),
+
+            headerBlur.topAnchor.constraint(equalTo: pane.topAnchor),
+            headerBlur.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
+            headerBlur.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
+            headerBlur.heightAnchor.constraint(equalToConstant: 72),
         ])
 
         NSLayoutConstraint.activate([
@@ -1988,7 +2139,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 比顶栏高度多留 28：图片滚到顶栏下方时，
         // 上方的渐变模糊才有作用空间（否则第一行紧贴边缘，看不出淡出）
         // 顶栏已无背景，只需让出标题行的高度（logo 中心 47 + 少量留白）
-        thumbnailGrid.setTopContentInset(52)
+        // 内容从窗口最顶端开始，**穿过顶栏的模糊带**。
+        //
+        // 这是让模糊「看得见」的关键：之前给了 44~56pt 的顶部内边距，
+        // 首行永远停在模糊带下方，浮栏里没有任何东西可模糊，
+        // 于是无论模糊做得多实在，看上去都只是「一条略深的矩形」。
+        thumbnailGrid.setTopContentInset(0)
         // 图库在顶部 100pt 内渐隐，替代「顶栏模糊」（顶栏是兄弟视图，
         // 玻璃采不到它的内容，只能让图库自己淡出）
         // thumbnailGrid.setTopFade(height: 100)   // 临时禁用，验证滚动
@@ -3090,6 +3246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                              inUse: used,
                              selectedPath: selectedItem?.path)
         updateEmptyState(visibleCount: visible.count)
+        updateLibraryHeader(visibleCount: visible.count)
         relayoutGridColumns()
         // 侧栏也要跟着刷新（预设可能增删、屏幕可能变化）
         let st = displayStatusMap()
@@ -3111,6 +3268,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// - 库为空：新用户，需要完整引导
     /// - 搜索无结果：是他自己筛出来的，只需说明没匹配到
     /// - 当前分类为空：库里有素材但不在这个文件夹，该提示去别的分类找
+    /// 更新顶部浮栏的标题：当前分类 + 素材数。
+    /// 这个位置原本是空的（标题被挪到 logo 右边），现在有了渐变模糊层，
+    /// 它终于能回到照片 App 里的位置。
+    private func updateLibraryHeader(visibleCount: Int) {
+        let cat = libraryFilter ?? ""
+        libraryHeaderTitle?.stringValue = cat.isEmpty ? L10n.t("nav.libraryAll") : cat
+        libraryHeaderSubtitle?.stringValue = L10n.t("header.count", visibleCount)
+        syncLibraryHeaderMask()
+    }
+
     private func updateEmptyState(visibleCount: Int) {
         guard let card = libraryEmptyLabel else { return }
         card.isHidden = visibleCount > 0
@@ -3410,9 +3577,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             catName = L10n.t("nav.libraryAll")
         }
         let count = filteredLibrary().count
-        // 标题现在在中栏顶部的渐变模糊层上（照照片 App）
+        // 标题由顶栏承载（顶栏现在通栏模糊，标题浮在它上面）。
+        // 位置在左栏右缘，也就是中栏起点 —— 与照片 App 一致。
         topTitle?.stringValue = catName
         topSubtitle?.stringValue = L10n.t("header.count", count)
+        // 中栏自己那份标题已经移除（它会让标题重复出现两次）
+        libraryHeaderTitle?.stringValue = catName
+        libraryHeaderSubtitle?.stringValue = L10n.t("header.count", count)
     }
 
     /// 刷新左栏底部的信息框：当前作用范围、分辨率、那块屏正在用的壁纸。
@@ -3526,6 +3697,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         updateStatus()
         checkCompatibility(item)
         syncDetailDocSize()
+        syncLibraryHeaderMask()
+        syncTopBarMask()
     }
 
     /// 更新构图摘要。
@@ -4241,6 +4414,134 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
     }
 
+    // MARK: 中栏顶部渐变模糊浮栏
+
+    /// 构建中栏顶部的渐变模糊条。
+    ///
+    /// 结构（从下到上）：
+    /// 1. NSVisualEffectView 提供**真实高斯模糊**（blur 一个子视图，不裁文字）
+    /// 2. 模糊层带 CAGradientLayer mask，上实下透 —— 内容是「渐渐模糊」，
+    ///    而不是「渐渐变透明」
+    /// 3. 标题独立浮在模糊层之上，**完全不参与 mask**
+    ///
+    /// 两个必须分开的理由：
+    /// - mask 加在 blur.layer 上会把同层的文字一起裁掉（第一版的 bug，标题半透明）
+    /// - 只做 alpha 渐变只是个透明的矩形，没有模糊，观感很廉价
+    private func makeLibraryHeader() -> NSVisualEffectView {
+        let container = NSVisualEffectView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        // 容器本身**不负责模糊**：它只是承载模糊层与文字的透明底板。
+        // 若直接在容器上开模糊，渐变 mask 会把文字一起吃掉。
+        container.material = .underWindowBackground
+        container.blendingMode = .withinWindow
+        container.state = .active
+        container.appearance = NSAppearance(named: .darkAqua)
+        container.wantsLayer = true
+
+        // 真正做模糊的层：铺满容器、带渐变 mask
+        let blurLayer = NSVisualEffectView()
+        blurLayer.translatesAutoresizingMaskIntoConstraints = false
+        blurLayer.material = .underWindowBackground
+        // 用 .withinWindow：采样的是**窗口内、本层之下**的内容 ——
+        // 也就是中栏那些缩略图，模糊后从浮栏下方透出来。
+        // .behindWindow 采的是桌面，而窗口已有 baseBlur 底板，
+        // 再模糊一次等于模糊的模糊，浮栏几乎看不出存在（实测）。
+        blurLayer.blendingMode = .withinWindow
+        blurLayer.state = .active
+        blurLayer.appearance = NSAppearance(named: .darkAqua)
+        blurLayer.wantsLayer = true
+        container.addSubview(blurLayer)
+
+        let mask = CAGradientLayer()
+        // 末尾用 alpha 0 的白而非 clear：clear 会被当成「黑 + 0 alpha」，
+        // 插值途中拖出一层灰，底部边界能看见一条线。
+        mask.colors = [
+            NSColor.white.cgColor,
+            NSColor.white.withAlphaComponent(0.7).cgColor,
+            NSColor.white.withAlphaComponent(0.25).cgColor,
+            NSColor.white.withAlphaComponent(0.0).cgColor,
+        ]
+        mask.locations = [0.0, 0.35, 0.68, 1.0]
+        mask.startPoint = CGPoint(x: 0.5, y: 1.0)
+        mask.endPoint = CGPoint(x: 0.5, y: 0.0)
+        blurLayer.layer?.mask = mask
+        libraryHeaderMask = mask
+
+        // 一层很淡的压暗，让浮栏在亮壁纸上也有体积感
+        let tint = PassthroughLayerView()
+        tint.wantsLayer = true
+        tint.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.12).cgColor
+        tint.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(tint)
+
+        let title = NSTextField(labelWithString: "")
+        title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        title.textColor = .labelColor
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        let subtitle = NSTextField(labelWithString: "")
+        subtitle.font = NSFont.systemFont(ofSize: 11)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(title)
+        container.addSubview(subtitle)
+        libraryHeaderTitle = title
+        libraryHeaderSubtitle = subtitle
+
+        NSLayoutConstraint.activate([
+            blurLayer.topAnchor.constraint(equalTo: container.topAnchor),
+            blurLayer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            blurLayer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            blurLayer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            tint.topAnchor.constraint(equalTo: container.topAnchor),
+            tint.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            tint.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            tint.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            title.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            title.topAnchor.constraint(equalTo: container.topAnchor, constant: 10),
+            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
+        ])
+
+        return container
+    }
+
+    /// 浮栏文字的兜底阴影：模糊背景的明暗不可控，
+    /// 一层很淡的深色阴影能让浅色文字在任何底上都站得住。
+    static func headerTextShadow() -> NSShadow {
+        let s = NSShadow()
+        s.shadowColor = NSColor.black.withAlphaComponent(0.45)
+        s.shadowBlurRadius = 3
+        s.shadowOffset = NSSize(width: 0, height: -1)
+        return s
+    }
+
+    /// 同步顶栏渐变遮罩的尺寸。
+    ///
+    /// CAGradientLayer 不跟随父视图 —— 不同步的话它停在 0×0，
+    /// 整条顶栏的模糊与压暗都会被裁成没有，看起来就只剩一层薄薄的底色。
+    /// 中栏浮栏有同名方法，顶栏这份之前漏了（实际 bug）。
+    private func syncTopBarMask() {
+        guard let bar = topBarBlur, let mask = topBarMask else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        mask.frame = bar.bounds
+        CATransaction.commit()
+    }
+
+    /// 同步浮栏渐变的尺寸。
+    /// CAGradientLayer 不会随父视图自动变宽，必须在 layout 之后手动同步 ——
+    /// 不更新的话遮罩停在初始的 0 尺寸，整条浮栏会完全透明。
+    private func syncLibraryHeaderMask() {
+        guard let blur = libraryHeaderBlur, let mask = libraryHeaderMask else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        mask.frame = blur.bounds
+        CATransaction.commit()
+    }
     // MARK: 空状态引导
 
     /// 图库为空时的引导卡片。
@@ -4865,6 +5166,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         detailPaneView?.isHidden = detailCollapsed
         // 折叠时不显示分隔拖拽条，避免在 0 宽位置上误拖
         rightHandleView?.isHidden = detailCollapsed
+
+        // 中栏右缘：展开时贴右栏（留 8pt 缝）；折叠时贴窗口右缘。
+        //
+        // 不切换的话，折叠后中栏的右缘仍绑在已被推出窗口的右栏上，
+        // 整条边界跟着跑到窗口外 —— 滚动条被裁掉、右侧也没有边距，
+        // 看起来像「内容一直顶到窗口外」。
+        if detailCollapsed {
+            middleTrailingConstraint?.isActive = false
+            middleTrailingCollapsed?.isActive = true
+        } else {
+            middleTrailingCollapsed?.isActive = false
+            middleTrailingConstraint?.isActive = true
+        }
         collapseButton.image = NSImage(
             systemSymbolName: detailCollapsed ? "sidebar.right" : "sidebar.right",
             accessibilityDescription: nil)
@@ -5579,7 +5893,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func rebindTitleToSidebar() {
         guard let title = topTitleView else { return }
         titleLeadingConstraint?.isActive = false
-        let c = title.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -67)
+        // 与网格第一列左缘对齐：sidebar.trailing + 8（中栏起点）+ 16（网格内边距）
+        let c = title.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 24)
         c.isActive = true
         titleLeadingConstraint = c
 
