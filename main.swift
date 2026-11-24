@@ -1173,6 +1173,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var importBanner: NSView?
     private var importLabel: NSTextField?
     private var importIndicator: NSProgressIndicator?
+    /// 导入完成后的绿色对勾（与转圈同位置互斥显示）
+    private var importCheck: NSImageView?
     /// 正在进行的导入批次计数。用计数而非布尔，才能正确处理并发导入。
     private var importInFlight = 0
     /// 结果浮标的显示序号，用于让旧的延时关闭失效
@@ -3435,16 +3437,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 用户不会面对一个毫无反应的窗口。
     private func handleDrop(_ paths: [String]) {
         let total = paths.count
-        addPaths(paths) { [weak self] added in
+        addPaths(paths) { [weak self] result in
             guard let self else { return }
             self.endImport()
-            if added == 0 {
-                // 全是不支持的类型，或全已存在
-                self.showToast(L10n.t("drop.nothingAdded"))
-            } else if added < total {
-                self.showToast(L10n.t("drop.addedPartial", added, total - added))
+            if result.added == 0 {
+                // 拖的全是本文件夹里已有的图 —— 说清楚原因，
+                // 比笼统一句「已存在」有用得多。
+                if result.allAlreadyHere {
+                    self.showToast(L10n.t("drop.alreadyInFolder"), success: false)
+                } else {
+                    self.showToast(L10n.t("drop.nothingAdded"), success: false)
+                }
+            } else if result.added < total {
+                self.showToast(L10n.t("drop.addedPartial", result.added, total - result.added))
             } else {
-                self.showToast(L10n.t("drop.added", added))
+                self.showToast(L10n.t("drop.added", result.added))
             }
         }
     }
@@ -3520,7 +3527,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// - Parameters:
     ///   - path: 源文件绝对路径
     ///   - category: 落地的分类子目录（空串 = 壁纸文件夹根）
-    private func importIntoWallpaperFolder(_ path: String, category: String? = nil) -> String {
+    /// 一次导入的整体结果，交给调用方决定怎么提示
+    struct AddResult {
+        /// 实际新增到库里的个数
+        let added: Int
+        /// 是否所有文件都因为「本来就在目标文件夹里」而被跳过。
+        /// 用来区分「拖回了同一个文件夹」和「拖的全是已在库中的外部文件」。
+        let allAlreadyHere: Bool
+    }
+
+    /// 单个文件的导入结果
+    private struct ImportOutcome {
+        /// 落地后的绝对路径
+        let path: String
+        /// 是否因为「本来就在目标目录里」而跳过了复制。
+        /// 这种跳过不是失败，但也不该算成新增 —— 用户拖的就是这个文件夹里的图。
+        let alreadyInDestination: Bool
+        /// 是否因同名而改了文件名（-2、-3 …）
+        let renamed: Bool
+    }
+
+    private func importIntoWallpaperFolder(_ path: String, category: String? = nil) -> ImportOutcome {
         let fm = FileManager.default
         let folder = Settings.wallpaperFolder
         try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -3538,14 +3565,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             destDir = folder
         }
 
-        let src = URL(fileURLWithPath: path)
-        let folderPath = folder.standardizedFileURL.path
-        if src.standardizedFileURL.path.hasPrefix(folderPath + "/") {
-            return path      // 已在文件夹里
+        let src = URL(fileURLWithPath: path).standardizedFileURL
+
+        // 只有「源文件已经在目标目录里」才算无需复制。
+        //
+        // 这里必须判断**目标目录**，不能判断「是否在壁纸库内」：
+        // 用户在 25.12.3 里选图、拖进 test，是一个合法的「复制到另一分类」，
+        // 源文件恰好在库内并不改变这个意图。按「在库内」提前返回，
+        // 结果就是文件没进 test、入库时又被当成重复而跳过 —— 看起来完全没反应。
+        if src.deletingLastPathComponent().path == destDir.standardizedFileURL.path {
+            // 已经在目标目录里，无需复制。
+            // 这正好是「用户在访达打开着当前分类，又把里面的图拖回来」的场景 ——
+            // 调用方会据此给出专门提示，而不是笼统地说「已存在」。
+            return ImportOutcome(path: path, alreadyInDestination: true, renamed: false)
         }
 
         var dest = destDir.appendingPathComponent(src.lastPathComponent)
         // 同名冲突时加序号，绝不覆盖用户已有文件
+        var renamed = false
         if fm.fileExists(atPath: dest.path) {
             let base = src.deletingPathExtension().lastPathComponent
             let ext = src.pathExtension
@@ -3555,13 +3592,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                 dest = destDir.appendingPathComponent(name)
                 i += 1
             } while fm.fileExists(atPath: dest.path) && i < 1000
+            renamed = true
         }
 
         do {
             try fm.copyItem(at: src, to: dest)
-            return dest.path
+            return ImportOutcome(path: dest.path,
+                                 alreadyInDestination: false,
+                                 renamed: renamed)
         } catch {
-            return path      // 复制失败就退回原路径，不阻断添加
+            // 复制失败就退回原路径，不阻断添加
+            return ImportOutcome(path: path, alreadyInDestination: false, renamed: false)
         }
     }
 
@@ -3801,15 +3842,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         guard panel.runModal() == .OK else { return }
         let paths = panel.urls.map { $0.path }
         let total = paths.count
-        addPaths(paths) { [weak self] added in
+        addPaths(paths) { [weak self] result in
             guard let self else { return }
             self.endImport()
-            if added == 0 {
-                self.showToast(L10n.t("drop.nothingAdded"))
-            } else if added < total {
-                self.showToast(L10n.t("drop.addedPartial", added, total - added))
+            if result.added == 0 {
+                if result.allAlreadyHere {
+                    self.showToast(L10n.t("drop.alreadyInFolder"), success: false)
+                } else {
+                    self.showToast(L10n.t("drop.nothingAdded"), success: false)
+                }
+            } else if result.added < total {
+                self.showToast(L10n.t("drop.addedPartial", result.added, total - result.added))
             } else {
-                self.showToast(L10n.t("drop.added", added))
+                self.showToast(L10n.t("drop.added", result.added))
             }
         }
     }
@@ -3825,12 +3870,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     ///
     /// - Parameter paths: 源文件绝对路径
     /// - Parameter completion: 主线程回调，参数为新增数量
-    func addPaths(_ paths: [String], completion: ((Int) -> Void)? = nil) {
-        guard !paths.isEmpty else { completion?(0); return }
+    func addPaths(_ paths: [String], completion: ((AddResult) -> Void)? = nil) {
+        guard !paths.isEmpty else { completion?(AddResult(added: 0, allAlreadyHere: false)); return }
 
         // 只接受本应用能处理的类型，避免把随便什么文件塞进库里
         let supported = paths.filter { MediaTypes.isSupported($0) }
-        guard !supported.isEmpty else { completion?(0); return }
+        guard !supported.isEmpty else { completion?(AddResult(added: 0, allAlreadyHere: false)); return }
 
         // 分类必须在主线程取：后台线程不能读 libraryFilter。
         let category = libraryFilter ?? ""
@@ -3841,35 +3886,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             guard let self else { return }
             // 统一收进壁纸文件夹：外部文件会被复制进来，
             // 这样素材库的位置稳定，不依赖用户原始文件是否被移动或删除。
-            var usable: [String] = []
-            usable.reserveCapacity(supported.count)
+            var outcomes: [ImportOutcome] = []
+            outcomes.reserveCapacity(supported.count)
             for p in supported {
-                usable.append(self.importIntoWallpaperFolder(p, category: category))
+                outcomes.append(self.importIntoWallpaperFolder(p, category: category))
             }
+            let usable = outcomes.map { $0.path }
 
             DispatchQueue.main.async {
-                var added = 0
-                StateStore.shared.update { st in
-                    for path in usable where !st.library.contains(where: { $0.path == path }) {
-                        st.library.append(LibraryItem(path: path, kind: MediaKind.detect(path)))
-                        added += 1
-                    }
-                    // 只入库存档，不自动铺到任何屏幕上。
-                    // 加了文件就悄悄改掉别人的桌面是意外行为 —— 要用哪张由用户
-                    // 显式点「设为该屏壁纸」决定。
-                }
+                // 复制已经落盘，先记下扫描前的库，用于事后判断哪些是新的。
+                let before = Set(self.state.library.map { $0.path })
 
-                // 重扫文件夹：新文件已复制进磁盘，但库与分类都还是旧的。
-                // 不重扫的话，拖入后当前分类里看不到它（用户以为没加成功）。
+                // 直接以磁盘为准重建库：新复制进来的文件本来就在文件夹里，
+                // 重扫一步到位，还能顺带修正它们所属的分类。
+                //
+                // 不能「先按 usable 逐条 append、再重扫」：
+                // 重扫是**以文件夹为准重建**，会把上一行刚 append 的条目
+                // 按实际磁盘位置重新归类，两者叠加容易把计数算错。
+                // 更关键的是，复制期间若发生过自动刷新（切回 App 会触发），
+                // 文件可能已经被扫进库了 —— 这时再按路径判重就会误报「已存在」，
+                // 而用户明明刚把文件拖进了另一个分类。
                 self.scanWallpaperFolder()
                 self.reloadLibrary()
+
+                // 以「目标路径现在是否在库中」为准统计新增，
+                // 而不是拿复制前后的临时列表相减。
+                let after = Set(self.state.library.map { $0.path })
+                let added = usable.filter { after.contains($0) && !before.contains($0) }.count
+
+                // 全部都是「本来就在这个文件夹里」—— 这是用户在访达打开着当前分类、
+                // 又把里面的图拖回来的场景。要说清楚原因，不能笼统报「已存在」。
+                let allAlreadyHere = outcomes.allSatisfy { $0.alreadyInDestination }
                 // 选中新加入的素材，方便用户接着决定要不要用它
                 if added > 0, self.state.library.contains(where: { $0.path == usable[0] }) {
                     StateStore.shared.update { $0.lastSelectedItem = usable[0] }
                 }
                 // 只刷新界面，不重铺壁纸 —— assignment 没变，重铺纯属多余。
                 self.refreshControls()
-                completion?(added)
+                completion?(AddResult(added: added, allAlreadyHere: allAlreadyHere))
             }
         }
     }
@@ -3897,7 +3951,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         label.textColor = .white
         label.translatesAutoresizingMaskIntoConstraints = false
 
+        // 成功后的对勾：与转圈占同一格、同一尺寸，靠 isHidden 互换。
+        // 转圈停下就整体消失会留下一条空白，看着像「少了什么」；
+        // 换成对勾既补上这个空位，也让「完成」这件事有个明确的视觉落点。
+        let check = NSImageView()
+        check.image = NSImage(systemSymbolName: "checkmark.circle.fill",
+                              accessibilityDescription: nil)
+        check.contentTintColor = NSColor.systemGreen
+        check.imageScaling = .scaleProportionallyUpOrDown
+        check.isHidden = true
+        check.translatesAutoresizingMaskIntoConstraints = false
+
         box.addSubview(spinner)
+        box.addSubview(check)
         box.addSubview(label)
 
         NSLayoutConstraint.activate([
@@ -3906,6 +3972,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             spinner.widthAnchor.constraint(equalToConstant: 12),
             spinner.heightAnchor.constraint(equalToConstant: 12),
 
+            // 与 spinner 完全重合，两者永不并存
+            check.leadingAnchor.constraint(equalTo: spinner.leadingAnchor),
+            check.centerYAnchor.constraint(equalTo: spinner.centerYAnchor),
+            check.widthAnchor.constraint(equalToConstant: 12),
+            check.heightAnchor.constraint(equalToConstant: 12),
+
+            // 文案锚在 spinner 上（它始终占位，只是隐藏），
+            // 这样转圈换对勾时文字不会横向跳动。
             label.leadingAnchor.constraint(equalTo: spinner.trailingAnchor, constant: 7),
             label.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -12),
             label.centerYAnchor.constraint(equalTo: box.centerYAnchor),
@@ -3915,6 +3989,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
         importLabel = label
         importIndicator = spinner
+        importCheck = check
         return box
     }
 
@@ -3929,6 +4004,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                                                object: nil)
         toastCount = 0
         importLabel?.stringValue = L10n.t("import.inProgress", total)
+        importCheck?.isHidden = true
+        importIndicator?.isHidden = false
         importIndicator?.startAnimation(nil)
         importBanner?.isHidden = false
     }
@@ -3936,9 +4013,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     /// 在导入浮标上显示一条结果，几秒后消失。
     /// 底栏已被移除（statusLabel 永远隐藏），所以结果提示复用同一个浮标位，
     /// 把转圈换成对勾、把文案换成结果 —— 位置不变，用户的视线不用移动。
-    private func showToast(_ message: String) {
+    /// 在浮标上显示结果。
+    /// - Parameter success: 真的有素材入库才显示绿色对勾；
+    ///   一个都没加进来时用中性图标，否则「未添加」配个绿勾自相矛盾。
+    private func showToast(_ message: String, success: Bool = true) {
         toastCount += 1
         importIndicator?.stopAnimation(nil)
+        importIndicator?.isHidden = true
+        importCheck?.image = NSImage(
+            systemSymbolName: success ? "checkmark.circle.fill" : "exclamationmark.circle.fill",
+            accessibilityDescription: nil)
+        importCheck?.contentTintColor = success ? .systemGreen : .systemOrange
+        importCheck?.isHidden = false
         importLabel?.stringValue = message
         importBanner?.isHidden = false
         NSObject.cancelPreviousPerformRequests(withTarget: self,
