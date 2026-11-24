@@ -301,25 +301,8 @@ final class SidebarNavigator: NSView {
             wash.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
         AmbientColorSampler.shared.observe { [weak wash] c in
-            wash?.layer?.backgroundColor = c.withAlphaComponent(0.30).cgColor
+            wash?.layer?.backgroundColor = c.withAlphaComponent(0.14).cgColor
         }
-
-        // 描边：固定极淡白线（MeloX 的做法）。
-        // 玻璃的染色交给 wash 层，描边始终是这条恒定的白线 ——
-        // 早期让描边跟着壁纸变色，边界反而看不清。
-        //
-        // 注意：必须在 wash 之后添加，否则会被染色层盖住。
-        let rim = GlassRimView()
-        rim.cornerRadius = 16
-        rim.usesFixedWhiteStroke = true
-        rim.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(rim)
-        NSLayoutConstraint.activate([
-            rim.topAnchor.constraint(equalTo: topAnchor),
-            rim.leadingAnchor.constraint(equalTo: leadingAnchor),
-            rim.trailingAnchor.constraint(equalTo: trailingAnchor),
-            rim.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
 
         outline.headerView = nil
         outline.backgroundColor = .clear

@@ -179,12 +179,13 @@ final class GlassRimView: NSView {
         let path = NSBezierPath(roundedRect: r, xRadius: cornerRadius, yRadius: cornerRadius)
         path.lineWidth = 1
 
-        // 描边颜色 = 环境色的高亮版，而不是固定白。
-        // Vorssaint 的边框会随内容变色，来源就是把材质的采样结果染进描边里。
-        // 这里用环境色的 HSV 提升亮度 + 少量白，保留色相。
         let rimColor: NSColor
         if usesFixedWhiteStroke {
-            path.lineWidth = 1
+            // MeloX 的原始参数：0.65pt 线宽 + 42% 白。
+            // 之前写成 1pt，比原生粗一半，视觉上明显更亮 ——
+            // 1pt 在 Retina 上是 2 个物理像素，0.65pt 只有约 1.3 个，
+            // 后者才是那种「刚好能看见但几乎不存在」的细线。
+            path.lineWidth = 0.65
             rimColor = NSColor.white.withAlphaComponent(0.42)
         } else {
             path.lineWidth = 1
@@ -1255,6 +1256,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private weak var libraryPaneView: NSView?
     /// 中栏顶部的渐变模糊浮栏（标题「文件夹名 + 数量」放这里）
     private weak var libraryHeaderBlur: NSVisualEffectView?
+    /// 通栏渐变模糊层（横跨三栏，压在内容之上、顶栏控件之下）
+    private weak var globalHeaderBlur: GradientMaskBlurView?
     /// 浮栏的渐变遮罩：上实下透，让网格内容从中穿过时自然隐去
     private weak var libraryHeaderMask: CAGradientLayer?
     /// 顶栏通栏的渐变模糊底（含右栏区域）
@@ -1653,6 +1656,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         for v in [sidebar, middle, right, topBar, leftHandle, rightHandle] {
             container.addSubview(v)
         }
+
+        // 通栏渐变模糊：横跨左中右三栏，位于所有内容之上、顶栏控件之下。
+        //
+        // 三栏各自有理由需要它：
+        // - 左栏：列表滚动时元素会升到红绿灯那一行，有模糊层压着才不刺眼
+        // - 中栏：网格缩略图从它下方穿过时自然虚化
+        // - 右栏：顶部要让出位置给控件，也需要同一层底
+        // 放在容器层而不是某一栏内部，才能一次覆盖三栏、边缘不会出现断层。
+        let globalBlur = GradientMaskBlurView()
+        globalBlur.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(globalBlur, positioned: .above, relativeTo: nil)
+        globalHeaderBlur = globalBlur
+        libraryHeaderMask = globalBlur.sharedGradient
+        NSLayoutConstraint.activate([
+            globalBlur.topAnchor.constraint(equalTo: container.topAnchor),
+            globalBlur.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            globalBlur.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            globalBlur.heightAnchor.constraint(equalToConstant: 72),
+        ])
+
+        // 顶栏控件必须浮在模糊层之上，否则会被它盖住。
+        container.addSubview(topBar, positioned: .above, relativeTo: globalBlur)
+
+        // 左栏的描边也要浮在模糊之上。
+        //
+        // 描边画在 sidebar 内部，而 globalBlur 是它的父容器之上的层 ——
+        // 子视图的顺序无法超越父视图之上的兄弟，所以那一段描边会被糊掉。
+        // 照片 App 的处理是：内容可以被顶栏虚化，但面板轮廓始终清晰。
+        // 这里在容器层再画一份同样的描边，位置跟随左栏，压在模糊之上。
+        let sidebarRimOverlay = GlassRimView()
+        sidebarRimOverlay.cornerRadius = 16
+        sidebarRimOverlay.usesFixedWhiteStroke = true
+        sidebarRimOverlay.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(sidebarRimOverlay, positioned: .above, relativeTo: globalBlur)
+        NSLayoutConstraint.activate([
+            sidebarRimOverlay.topAnchor.constraint(equalTo: sidebar.topAnchor),
+            sidebarRimOverlay.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
+            sidebarRimOverlay.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            sidebarRimOverlay.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+        ])
 
         // 视图都进层级后再把标题绑到左栏右缘：
         // 跨视图约束若在 sidebar 加入层级前建立会崩。
@@ -2117,21 +2160,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 顶栏和中栏是兄弟视图，放在顶栏里的模糊看不到中栏的缩略图 ——
         // 实测：去掉遮罩后顶栏依然完全不模糊，证明问题在采样范围而非遮罩。
         // 放进中栏后，它下面的网格就是可见的采样源。
-        let headerBlur = GradientMaskBlurView()
-        headerBlur.translatesAutoresizingMaskIntoConstraints = false
-        libraryHeaderBlur = headerBlur as? NSVisualEffectView
-        libraryHeaderMask = headerBlur.sharedGradient
-
-        for v in [toolbar, thumbnailGrid, emptyCard, banner, headerBlur] { pane.addSubview(v) }
+        // 顶栏渐变模糊已提到容器层（见 buildWindow），
+        // 这样它才能横跨三栏、同时模糊左栏滚动内容与中栏网格。
+        for v in [toolbar, thumbnailGrid, emptyCard, banner] { pane.addSubview(v) }
 
         NSLayoutConstraint.activate([
             banner.topAnchor.constraint(equalTo: pane.topAnchor, constant: 12),
             banner.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -20),
-
-            headerBlur.topAnchor.constraint(equalTo: pane.topAnchor),
-            headerBlur.leadingAnchor.constraint(equalTo: pane.leadingAnchor),
-            headerBlur.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
-            headerBlur.heightAnchor.constraint(equalToConstant: 72),
         ])
 
         NSLayoutConstraint.activate([
@@ -2204,8 +2239,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             rightWash.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
             rightWash.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
         ])
+        rightWash.layer?.backgroundColor = AmbientColorSampler.shared.color
+            .withAlphaComponent(0.14).cgColor
         AmbientColorSampler.shared.observe { [weak rightWash] c in
-            rightWash?.layer?.backgroundColor = c.withAlphaComponent(0.30).cgColor
+            rightWash?.layer?.backgroundColor = c.withAlphaComponent(0.14).cgColor
         }
         NSLayoutConstraint.activate([
             rightTint.topAnchor.constraint(equalTo: pane.topAnchor),
