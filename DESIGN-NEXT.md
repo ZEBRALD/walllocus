@@ -995,7 +995,175 @@ root.addArrangedSubview(compactSliderRow(L10n.t("win.offsetY"), offYSlider, offY
 
 ---
 
-## 十四、全部功能的总实现顺序
+## 十四、顶层浮栏按钮设计
+
+> 记录时间：2026-11-24
+> 参考：macOS 照片 App 的顶部工具条；圆形按钮材质对照 MeloX 的「听歌识曲」按钮。
+
+### 14.1 总体形态
+
+所有按钮统一为**圆形**，材质用 LiquidGlass。当前按钮是 `bezelStyle = .rounded` 的方形，要换掉。
+
+```
+浮栏高度 72，按钮直径 30，垂直居中于 y=47 这条基线上
+按钮之间的间距 8
+```
+
+**圆形按钮的实现**（参考 MeloX 的 `waveform` 按钮）：
+
+```swift
+button.isBordered = false
+button.wantsLayer = true
+button.layer?.cornerRadius = 15   // 直径的一半
+button.layer?.backgroundColor = 白色 10% 或 NSVisualEffectView 底色
+button.layer?.borderWidth = 0.65
+button.layer?.borderColor = 白色 42%
+```
+
+材质本身用 `NSVisualEffectView`（`.popover`）垫在按钮下面，而不是给按钮设 backgroundColor —— 前者才有真正的模糊。
+
+### 14.2 按钮清单（从左到右）
+
+```
+[返回] [文件夹名+数量]              [-][+] [样式] [搜索] [+] [齿轮] [折叠]
+  ↑ 仅在可返回时出现                    ↑ 这一组是右侧工具区
+```
+
+| 按钮 | 功能 | 出现条件 |
+|---|---|---|
+| **返回** | 回到上一级目录 | 仅当当前在子文件夹内 |
+| **列数 -** | 减少 2 列 | 列数 > 3 时可用 |
+| **列数 +** | 增加 2 列 | 列数 < 9 时可用 |
+| **样式切换** | 间距网格 ↔ 正方形填充 | 始终 |
+| **搜索** | 窄时圆钮，宽时展开为搜索框 | 始终（形态随宽度变） |
+| **添加** | 打开文件选择 | 始终（保留现有） |
+| **设置** | 设置菜单 | 始终（保留现有） |
+| **折叠右栏** | 收起/展开右栏 | 始终（保留现有） |
+
+### 14.3 返回按钮
+
+位置：「文件夹名称 + 素材个数」的**左侧**，两者之间 8pt 间距。
+
+**显示条件**：
+- 当前在根目录（`libraryFilter == nil`）→ **隐藏**，标题直接贴左
+- 当前在某个子文件夹 → 显示，标题右移让位
+
+**行为**：回到上一级。注意当前只支持一层子目录，所以「返回」就是回到根目录。
+实现里仍按「取路径的最后一个 `/` 之前的部分」来做，这样将来支持多级时不用改。
+
+图标：`chevron.left`，与照片 App 一致。
+
+### 14.4 列数加减
+
+```swift
+// 当前状态
+private var gridColumnCount = 5      // 默认 5
+// 允许范围 3...9，步长 2
+func stepColumns(_ delta: Int) {
+    gridColumnCount = max(3, min(9, gridColumnCount + delta * 2))
+    Settings.gridColumnCount = gridColumnCount
+    relayoutGridColumns()
+}
+```
+
+**关键**：`relayoutGridColumns()` 现在是硬编码 `let cols = 5`，要改成读 `gridColumnCount`。
+缩略图尺寸会自动跟随——`applyCardSize` 本来就按列数均分可用宽度。
+
+**持久化**：列数存进 `Settings`，重启保持。
+
+**禁用态**：到 3 或 9 时，对应按钮置灰而不是消失（保持位置稳定）。
+
+### 14.5 网格样式切换
+
+两种模式：
+
+| 模式 | 缩略图行为 | 观感 |
+|---|---|---|
+| **间距网格**（当前） | 保持原始比例，图片完整显示，卡片之间留空隙 | 像照片 App 的「适应」 |
+| **正方形填充** | 裁切填满正方形，无空隙 | 像照片 App 的「正方形」 |
+
+**实现要点**：
+
+1. 卡片尺寸：间距模式下按列数均分；填充模式下也用均分，但**去掉 interitem 间距**
+2. `RoundedImageView` 增加一个 `fillsSquare: Bool`：
+   - `false`：走现有 `imageRect`（等比缩放居中）
+   - `true`：直接画满 `bounds`，按短边居中裁切
+3. 圆角：间距模式 8pt；填充模式改小到 2pt（参考照片 App，填满时圆角几乎不可见）
+4. 状态存进 `Settings.gridStyle`，重启保持
+
+**图标**：`square.grid.2x2`（间距）/ `square.grid.3x3.fill`（填充），用图标本身表达当前模式。
+
+### 14.6 搜索的响应式形态
+
+这是最需要设计的一项，照片 App 的做法：
+
+```
+窄窗口：  [⋯] [🔍] [⇧] [♡] [□]        ← 只显示图标，圆形
+宽窗口：  [⋯] [⇪ 搜索_____________ ] [⇧] [♡] [□]   ← 展开成长条输入框
+```
+
+**触发条件**：窗口可用宽度（或浮栏可用宽度）是否足以容纳一个最小宽度的搜索框。
+
+```swift
+let minSearchWidth: CGFloat = 140   // 再窄就没有输入价值
+let collapsedWidth: CGFloat = 30    // 圆钮直径
+// 浮栏右侧剩余空间 = 总宽 - 标题区 - 其他按钮占位
+let expands = remainingWidth >= (minSearchWidth + 8)
+```
+
+**宽度行为**：展开后搜索框**不固定宽度**，而是跟着浮栏右侧空间一直拉伸：
+
+```swift
+// 搜索框右缘贴「加号按钮左侧 - 8」
+// 左缘贴「标题右侧 + 8」，但不小于 minSearchWidth
+// 两者都满足时，宽度自然随窗口变化
+```
+
+**实现细节**：
+- 圆钮态：用一个 30×30 的圆形按钮，点一下切换到展开态（并把焦点给输入框）
+- 展开态：`NSSearchField` 宽度由约束驱动，不写死
+- 收起时机：失焦且无输入内容时自动收回圆钮态
+- **不要做成两个独立控件**，那样会闪烁；用同一个 `NSSearchField`，只是切换它和圆钮的 `isHidden`
+
+### 14.7 与现有功能的衔接
+
+**顶栏控件当前挂载位置**：都在 `buildTopBar()` 里的 `bar` 上，通过 `bar.trailingAnchor` 排布。
+新增按钮后，右侧工具区变成一串等距圆形按钮，建议改用 `NSStackView` 管理：
+
+```swift
+let tools = NSStackView(views: [styleButton, searchControl, addButton, settingsButton, collapseButton])
+tools.spacing = 8
+tools.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16)
+```
+
+搜索框展开时会挤压这个 stack —— 需要给搜索控件一个「可压缩」的优先级，让它在窄窗口时先收成圆钮。
+
+### 14.8 边界情况
+
+| 情况 | 处理 |
+|---|---|
+| 窗口太窄，放不下所有圆钮 | 搜索先收成圆钮；仍不够则列数按钮隐藏（功能仍可用菜单） |
+| 在根目录 | 返回按钮隐藏，标题左对齐 |
+| 分类为空 | 列数/样式按钮仍可用（作用于空网格无副作用） |
+| 折叠右栏后 | 浮栏变宽，搜索框自动展开（这是加分项，符合直觉） |
+| 搜索中有内容 | 不自动收回圆钮态 |
+
+### 14.9 验收标准
+
+1. 所有按钮呈圆形，直径 30，间距 8，垂直居中于 y=47
+2. 在子文件夹内显示返回按钮，点击回到根目录；根目录时按钮隐藏
+3. 列数 + 从 5 → 7 → 9，再点置灰；列数 - 从 5 → 3，再点置灰
+4. 改变列数后缩略图尺寸自动跟随，不需要手动刷新
+5. 列数重启后保持
+6. 样式切换后网格从「留空隙」变成「填满正方形」，圆角相应变小
+7. 窗口拉宽到一定程度，搜索从圆钮展开为长条；缩窄后收回
+8. 展开态搜索框宽度随窗口变化，不是固定值
+9. 折叠右栏后搜索框自动变宽
+
+---
+
+
+## 十五、全部功能的总实现顺序
 
 | 顺序 | 功能 | 理由 |
 |---|---|---|
@@ -1023,7 +1191,7 @@ root.addArrangedSubview(compactSliderRow(L10n.t("win.offsetY"), offYSlider, offY
 
 ---
 
-## 十五、跨功能的共同风险
+## 十六、跨功能的共同风险
 
 1. **Codable 向前兼容**：`AppState` 和 `Adjustment` 都是手写解码以兼容旧数据。新增字段一律用 `decodeIfPresent` + 默认值，否则老用户升级会丢库。
 2. **L10n 重复 key 会直接崩溃**：批量加文案后必须查重（中英各一次）。
