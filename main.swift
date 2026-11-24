@@ -1128,7 +1128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let paneSubtitle = NSTextField(labelWithString: "")
     /// 壁纸文件详情（只读）：分辨率 / 大小 / 分类 / 位置
     private let fileInfoLabel = NSTextField(labelWithString: "")
-    private var libraryEmptyLabel: NSTextField?
+    private var libraryEmptyLabel: NSView?
+    /// 空状态卡片里的标题与说明，按场景（空库 / 搜索无结果 / 分类为空）切换文案
+    private weak var emptyTitleLabel: NSTextField?
+    private weak var emptyStepsLabel: NSTextField?
+    private weak var emptyActionButton: NSButton?
     /// 右栏顶部的当前素材大图预览
     private let previewPane = PreviewPane(frame: .zero)
     private var detailScroll: NSScrollView?
@@ -1817,20 +1821,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
         thumbnailGrid.translatesAutoresizingMaskIntoConstraints = false
 
-        let emptyLabel = NSTextField(labelWithString: L10n.t("library.emptyHint"))
-        emptyLabel.font = NSFont.systemFont(ofSize: 12)
-        emptyLabel.textColor = .tertiaryLabelColor
-        emptyLabel.alignment = .center
-        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-        emptyLabel.isHidden = true
-        libraryEmptyLabel = emptyLabel
+        // 空库引导卡片：把「壁纸从哪来、怎么进来、怎么用上」讲清楚。
+        // 库为空时始终显示 —— 不做「下次不再提示」的持久化状态，
+        // 因为用户清空库后回到这个状态本来就该重新看到引导。
+        let emptyCard = makeEmptyStateCard()
+        emptyCard.isHidden = true
+        libraryEmptyLabel = emptyCard
 
         // 导入进行中的浮标：压在中栏右上角，不参与布局，
         // 因此不会挤动网格；导入结束后消失，不留下空位。
         let banner = makeImportBanner()
         importBanner = banner
 
-        for v in [toolbar, thumbnailGrid, emptyLabel, banner] { pane.addSubview(v) }
+        for v in [toolbar, thumbnailGrid, emptyCard, banner] { pane.addSubview(v) }
 
         NSLayoutConstraint.activate([
             banner.topAnchor.constraint(equalTo: pane.topAnchor, constant: 12),
@@ -1850,8 +1853,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             thumbnailGrid.trailingAnchor.constraint(equalTo: pane.trailingAnchor),
             thumbnailGrid.bottomAnchor.constraint(equalTo: pane.bottomAnchor),
 
-            emptyLabel.centerXAnchor.constraint(equalTo: pane.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: pane.centerYAnchor),
+            emptyCard.centerXAnchor.constraint(equalTo: pane.centerXAnchor),
+            emptyCard.centerYAnchor.constraint(equalTo: pane.centerYAnchor),
+            emptyCard.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
         ])
         // 顶部内边距：避让顶部的渐变模糊层（图库本身可以滚到它下面）
         // 比顶栏高度多留 28：图片滚到顶栏下方时，
@@ -2868,7 +2872,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         thumbnailGrid.reload(visible,
                              inUse: used,
                              selectedPath: selectedItem?.path)
-        libraryEmptyLabel?.isHidden = !visible.isEmpty
+        updateEmptyState(visibleCount: visible.count)
         relayoutGridColumns()
         // 侧栏也要跟着刷新（预设可能增删、屏幕可能变化）
         let st = displayStatusMap()
@@ -2882,6 +2886,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                        presetSelection: presetSelection,
                        categoryCovers: categoryCoverMap())
         refreshControls()
+    }
+
+    /// 根据当前场景更新空状态卡片的文案。
+    ///
+    /// 三种「空」的成因完全不同，笼统说「没有素材」会让用户困惑：
+    /// - 库为空：新用户，需要完整引导
+    /// - 搜索无结果：是他自己筛出来的，只需说明没匹配到
+    /// - 当前分类为空：库里有素材但不在这个文件夹，该提示去别的分类找
+    private func updateEmptyState(visibleCount: Int) {
+        guard let card = libraryEmptyLabel else { return }
+        card.isHidden = visibleCount > 0
+        guard visibleCount == 0 else { return }
+
+        let searching = !searchField.stringValue.isEmpty
+        let categoryEmpty = !state.library.isEmpty
+
+        if searching {
+            emptyTitleLabel?.stringValue = L10n.t("empty.noMatch")
+            emptyStepsLabel?.stringValue = ""
+            emptyStepsLabel?.isHidden = true
+            emptyActionButton?.isHidden = true
+        } else if categoryEmpty {
+            // 库里有素材、只是当前分类空 —— 引导用户回「全部」去找，
+            // 而不是打开文件夹（那会让人以为要去别处搬东西）
+            emptyTitleLabel?.stringValue = L10n.t("empty.emptyCategory")
+            emptyStepsLabel?.stringValue = L10n.t("empty.emptyCategoryHint")
+            emptyStepsLabel?.isHidden = false
+            emptyActionButton?.isHidden = true
+        } else {
+            emptyTitleLabel?.stringValue = L10n.t("empty.title")
+            emptyStepsLabel?.stringValue = L10n.t("empty.steps")
+            emptyStepsLabel?.isHidden = false
+            emptyActionButton?.isHidden = false
+        }
     }
 
     /// 用户点了网格卡片：只更新选择，不应用壁纸
@@ -3926,6 +3964,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                 completion?(AddResult(added: added, allAlreadyHere: allAlreadyHere))
             }
         }
+    }
+
+    // MARK: 空状态引导
+
+    /// 图库为空时的引导卡片。
+    ///
+    /// 新用户打开看到一个空网格和三栏面板，不知道素材从哪来。
+    /// 这里用最小成本把主流程讲清楚：壁纸来自一个文件夹、拖进来、拖到屏幕上。
+    /// 选择空状态卡片而非多步弹窗：无持久化状态、随时可回到这个状态、实现简单。
+    private func makeEmptyStateCard() -> NSView {
+        let card = NSView()
+        card.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        // 图标
+        let icon = NSImageView()
+        icon.image = NSImage(systemSymbolName: "photo.stack",
+                             accessibilityDescription: nil)
+        icon.contentTintColor = .tertiaryLabelColor
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.translatesAutoresizingMaskIntoConstraints = false
+
+        // 标题
+        let title = NSTextField(labelWithString: L10n.t("empty.title"))
+        title.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        title.textColor = .secondaryLabelColor
+        title.alignment = .center
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        // 三步说明
+        let steps = NSTextField(labelWithString: L10n.t("empty.steps"))
+        steps.font = NSFont.systemFont(ofSize: 12)
+        steps.textColor = .tertiaryLabelColor
+        steps.alignment = .center
+        steps.maximumNumberOfLines = 0
+        steps.lineBreakMode = .byWordWrapping
+        steps.preferredMaxLayoutWidth = 300
+        steps.translatesAutoresizingMaskIntoConstraints = false
+
+        // 打开壁纸文件夹按钮
+        let openButton = NSButton(title: L10n.t("empty.openFolder"),
+                                  target: self,
+                                  action: #selector(revealWallpaperFolder))
+        openButton.bezelStyle = .rounded
+        openButton.controlSize = .small
+        openButton.translatesAutoresizingMaskIntoConstraints = false
+
+        stack.addArrangedSubview(icon)
+        stack.setCustomSpacing(14, after: icon)
+        stack.addArrangedSubview(title)
+        stack.addArrangedSubview(steps)
+        stack.setCustomSpacing(14, after: steps)
+        stack.addArrangedSubview(openButton)
+
+        emptyTitleLabel = title
+        emptyStepsLabel = steps
+        emptyActionButton = openButton
+
+        card.addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 34),
+            icon.heightAnchor.constraint(equalToConstant: 34),
+            stack.topAnchor.constraint(equalTo: card.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+        ])
+
+        return card
     }
 
     // MARK: 导入进度
