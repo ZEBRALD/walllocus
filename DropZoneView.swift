@@ -110,7 +110,14 @@ final class DropZoneView: NSView {
     /// 拖拽中「是否真的离开了窗口」的轮询
     private var exitWatch: Timer?
     /// 探测「系统是否正在拖拽文件」的轮询
+    /// 旧的粘贴板轮询定时器，已弃用（保留声明避免牵动其它引用）
     private var dragWatch: Timer?
+    /// 拖拽开始通知
+    private var dragBeginObserver: NSObjectProtocol?
+    /// 拖拽结束通知（多条来源，统一收集便于移除）
+    private var dragEndObservers: [NSObjectProtocol] = []
+    /// 鼠标抬起兜底监听
+    private var mouseUpMonitor: Any?
     /// 每次拖入的候选数量，用于在 draggingUpdated 里刷新文案
     private var supportedCount = 0
     private var rejectedCount = 0
@@ -130,16 +137,13 @@ final class DropZoneView: NSView {
         // 只接收文件 URL；字符串/文本之类的拖入不会触发
         registerForDraggedTypes([.fileURL])
 
-        // 拖放接收层：铺满窗口，拖拽期间提到最上层
+        // 拖放接收层：铺满窗口，**只在拖拽期间**才加入视图层级。
+        //
+        // 不能在这里就 addSubview 常驻：它铺满整个窗口，只要 isEnabled 因为
+        // 任何原因保持为 true，就会吃掉窗口里所有鼠标事件（复选框、按钮全点不动），
+        // 而界面上完全看不出异常。约束改在插入时建立。
         dragSink.handler = self
         dragSink.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(dragSink)
-        NSLayoutConstraint.activate([
-            dragSink.leadingAnchor.constraint(equalTo: leadingAnchor),
-            dragSink.trailingAnchor.constraint(equalTo: trailingAnchor),
-            dragSink.topAnchor.constraint(equalTo: topAnchor),
-            dragSink.bottomAnchor.constraint(equalTo: bottomAnchor),
-        ])
         startDragWatch()
 
         overlay.wantsLayer = true
@@ -311,34 +315,47 @@ final class DropZoneView: NSView {
         overlay.isHidden = true
     }
 
-    /// 探测系统是否正在拖拽文件，据此开关接收层。
+    /// 接收层的上浮时机。
     ///
-    /// 拖放开始没有本地通知可监听（draggingEntered 可能被别的子视图吃掉），
-    /// 所以用剪贴板探测：NSDragPboard 上有文件 URL 就说明文件拖拽在途。
+    /// 早期实现每 80ms 读一次 NSPasteboard(name: .drag) 判断是否在拖拽：
+    /// 系统在拖拽结束后仍可能在该粘贴板上留下文件 URL（实测会一直残留），
+    /// 于是 App 永远认为「正在拖拽」，铺满窗口的接收层就常驻最上层、
+    /// 吃掉所有鼠标事件 —— 表现为右栏的复选框和按钮全部点不动，
+    /// 界面上却看不出任何异常。
+    ///
+    /// 现在只在两个确定的时机动作：窗口自己收到拖入（draggingEntered）时上浮，
+    /// 鼠标抬起或放置完成时摘掉。没有轮询，也就不存在状态卡住。
     private func startDragWatch() {
-        dragWatch?.invalidate()
-        var consecutiveMisses = 0
-        let t = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let dragging = NSPasteboard(name: .drag).availableType(from: [.fileURL]) != nil
-
-            if dragging {
-                consecutiveMisses = 0
-            } else {
-                // 拖拽期间粘贴板偶有瞬时读空：要连续多次读不到才算真的结束，
-                // 否则接收层会闪断，绿加号随之消失（伴随焦点跳变）。
-                consecutiveMisses += 1
-                guard consecutiveMisses >= 4 else { return }
-            }
-
-            guard self.dragSink.isEnabled != dragging else { return }
-            self.dragSink.isEnabled = dragging
-            if dragging {
-                self.addSubview(self.dragSink, positioned: .above, relativeTo: nil)
-            }
+        // 不再轮询。这里只保留一个鼠标抬起兜底：
+        // 拖拽在窗口外结束（或在别的应用里取消）时，我们也需要把接收层摘掉。
+        mouseUpMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseUp, .rightMouseUp]
+        ) { [weak self] e in
+            self?.deactivateSink()
+            return e
         }
-        RunLoop.main.add(t, forMode: .common)
-        dragWatch = t
+    }
+
+    /// 把接收层铺到最上层，让整个窗口都能接住拖入
+    private func activateSink() {
+        guard dragSink.superview == nil else { return }
+        dragSink.isEnabled = true
+        addSubview(dragSink, positioned: .above, relativeTo: nil)
+        NSLayoutConstraint.activate([
+            dragSink.leadingAnchor.constraint(equalTo: leadingAnchor),
+            dragSink.trailingAnchor.constraint(equalTo: trailingAnchor),
+            dragSink.topAnchor.constraint(equalTo: topAnchor),
+            dragSink.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    /// 从视图层级摘掉接收层。必须真的移除，不能只靠 hitTest ——
+    /// 它铺满整个窗口，留在层级里就会挡死所有控件。
+    private func deactivateSink() {
+        dragSink.isEnabled = false
+        if dragSink.superview != nil {
+            dragSink.removeFromSuperview()
+        }
     }
 
     /// 轮询兜底：拖拽期间若鼠标真的移出窗口，就收起浮层。
@@ -398,6 +415,9 @@ final class DropZoneView: NSView {
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        // 真的有一次拖入发生了 —— 此时才把接收层浮到最上层。
+        // 这是唯一可靠的「拖拽开始」信号：粘贴板探测会因残留而误判。
+        activateSink()
         // 库内素材拖回窗口时不该被当成「导入外部文件」：
         // 文件本来就在壁纸文件夹里，导入是空操作，弹出浮层反而干扰。
         if sender.draggingPasteboard.availableType(from: [WallpaperDrag.type]) != nil {
@@ -465,6 +485,7 @@ final class DropZoneView: NSView {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         cancelScheduledHide()
         hideOverlay()
+        deactivateSink()
         // 库内素材不导入
         if sender.draggingPasteboard.availableType(from: [WallpaperDrag.type]) != nil {
             return false
@@ -478,6 +499,7 @@ final class DropZoneView: NSView {
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
         cancelScheduledHide()
         hideOverlay()
+        deactivateSink()
     }
 }
 

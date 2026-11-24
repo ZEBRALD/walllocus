@@ -41,6 +41,12 @@ enum MediaKind: String, Codable {
 /// 玻璃面板的描边：沿圆角画一圈渐变高光。
 /// 上边偏亮、下边偏暗，模拟光线自上方入射时的边缘折射，
 /// 这是 macOS liquid glass 面板能在深色底上「浮起来」的关键。
+/// 纯装饰层：铺满容器但不接收任何鼠标事件。
+/// 用它替代裸 NSView 做 tint / 描边 / 背景，避免「盖住控件导致点不动」。
+final class PassthroughLayerView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 final class GlassRimView: NSView {
     /// 与面板一致的圆角
     var cornerRadius: CGFloat = 16
@@ -58,6 +64,11 @@ final class GlassRimView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override var isOpaque: Bool { false }
+
+    /// 这只是装饰性描边，铺满整个面板。
+    /// 不穿透的话它会吃掉面板上所有控件（按钮、复选框、滑块）的鼠标事件 ——
+    /// 表现为「点了没反应」，且因为视觉上什么都没变，极难定位。
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 0.5, dy: 0.5)
@@ -790,6 +801,16 @@ final class WallpaperManager {
             releaseFreeMemory()
         } else {
             applyAll()
+        }
+    }
+
+    /// 只切换已有播放器的静音状态。
+    ///
+    /// 静音是全局开关，改它不该重建壁纸窗口：
+    /// 重建会打断正在播放的视频（从头开始），而这个操作本身与画面无关。
+    func setMuted(_ muted: Bool) {
+        for (_, entry) in entries {
+            entry.player?.isMuted = muted
         }
     }
 
@@ -1881,7 +1902,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 右栏也不叠玻璃：与左栏、中栏共用同一块底层玻璃，
         // 只靠圆角 + 描边 + 极淡 tint 表达「浮起」。
         pane.wantsLayer = true
-        let rightTint = NSView()
+        let rightTint = PassthroughLayerView()
         rightTint.wantsLayer = true
         rightTint.layer?.backgroundColor = NSColor.clear.cgColor
         rightTint.translatesAutoresizingMaskIntoConstraints = false
@@ -2013,9 +2034,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         offYSlider.action = #selector(adjustmentChanged)
         root.addArrangedSubview(compactSliderRow(L10n.t("win.offsetY"), offYSlider, offYValue))
 
+        // 静音是**全局开关**（作用于所有视频壁纸），与「某屏 × 某图」的
+        // 构图调整不是一类东西，所以单独一个 action。
+        // 共用 adjustmentChanged 会让它被构图那条路径的刷新覆盖。
         muteCheck.target = self
-        muteCheck.action = #selector(adjustmentChanged)
-        muteCheck.state = .on
+        muteCheck.action = #selector(muteChanged)
+        muteCheck.state = state.muted ? .on : .off
+        // 复选框必须能接收点击：父视图若拦截了 hitTest，按钮就点不动。
+        muteCheck.isEnabled = true
+        muteCheck.refusesFirstResponder = false
         root.addArrangedSubview(muteCheck)
 
         root.addArrangedSubview(separator(width: 270))
@@ -4539,9 +4566,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             for s in self.targetScreens {
                 st.setAdjustment(adj, display: screenID(s), item: item.path)
             }
-            st.muted = (muteCheck.state == .on)
         }
         WallpaperManager.shared.applyAll()
+        refreshControls()
+    }
+
+    // MARK: 新手引导
+
+    /// 打开「新手引导」面板。
+    ///
+    /// 空库时中栏本身会显示引导卡片，但那只服务「什么都没加」的状态。
+    /// 已经用了一阵的人想回看这三个步骤，需要一个不依赖库状态的入口 ——
+    /// 所以做成独立面板，从应用菜单随时打开。
+    @objc private func showQuickGuide() {
+        let alert = NSAlert()
+        alert.messageText = L10n.t("guide.title")
+        alert.informativeText = L10n.t("guide.body")
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: L10n.t("guide.openFolder"))
+        alert.addButton(withTitle: L10n.t("common.close"))
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            revealWallpaperFolder()
+        }
+    }
+
+    /// 静音开关：全局生效，不涉及任何单屏/单图状态。
+    @objc private func muteChanged() {
+        let muted = (muteCheck.state == .on)
+        StateStore.shared.update { st in
+            st.muted = muted
+        }
+        // 只改播放器的 isMuted，不重建窗口 —— 重建会打断正在播放的视频
+        WallpaperManager.shared.setMuted(muted)
         refreshControls()
     }
 
@@ -4741,6 +4798,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         sub.addItem(withTitle: L10n.t("menu.about"),
                     action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                     keyEquivalent: "")
+
+        // 新手引导：空库时中栏会自动显示，但老用户已经过了那个阶段，
+        // 需要一个随时能回看的入口。
+        let guide = NSMenuItem(title: L10n.t("menu.guide"),
+                               action: #selector(showQuickGuide), keyEquivalent: "")
+        guide.target = self
+        sub.addItem(guide)
 
         sub.addItem(.separator())
 
