@@ -1239,6 +1239,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var rateRow: NSStackView?
     /// 自定义速度输入框：预设档位之外的任意值
     private let rateField = NSTextField(string: "1.0")
+    /// 构图摘要：用自然语言说明「这张图在这块屏」的构图状态。
+    /// 这是产品唯一的差异化能力，但此前只以三个滑块 + 三个数字呈现，
+    /// 用户根本不知道这些值是按「屏 × 图」记住的。
+    private let framingSummary = NSTextField(labelWithString: "")
     private let pauseButton = NSButton(title: L10n.t("win.pause"), target: nil, action: nil)
     private let autoStartCheck = NSButton(checkboxWithTitle: L10n.t("win.launchAtLogin"), target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "")
@@ -2062,6 +2066,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         compTitle.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         compTitle.textColor = .secondaryLabelColor
         root.addArrangedSubview(compTitle)
+
+        framingSummary.font = NSFont.systemFont(ofSize: 11)
+        framingSummary.textColor = .tertiaryLabelColor
+        framingSummary.maximumNumberOfLines = 0
+        framingSummary.lineBreakMode = .byWordWrapping
+        framingSummary.translatesAutoresizingMaskIntoConstraints = false
+        root.addArrangedSubview(framingSummary)
 
         for (i, m) in ScaleMode.allCases.enumerated() {
             modePopup.addItem(withTitle: m.label)
@@ -3433,6 +3444,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         zoomSlider.doubleValue = adj.zoom
         offXSlider.doubleValue = adj.offsetX
         offYSlider.doubleValue = adj.offsetY
+        updateFramingSummary(adj: adj)
         muteCheck.state = state.muted ? .on : .off
         // 速度控件只对视频出现：图片没有「快放」这个概念，
         // 显示一个永远无效的控件只会让人困惑。
@@ -3461,6 +3473,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         updateStatus()
         checkCompatibility(item)
         syncDetailDocSize()
+    }
+
+    /// 更新构图摘要。
+    ///
+    /// 用自然语言而不是复述三个数字：「放大 150% · 右移 12」比「1.5 / 0.12 / 0」
+    /// 直观得多，也更容易让人意识到这些值是**这块屏专属**的。
+    /// 全默认时写「默认构图」，让「没调过」和「调过」一眼可分 ——
+    /// 后者才是这个功能的价值所在。
+    private func updateFramingSummary(adj: Adjustment) {
+        let isDefault = abs(adj.zoom - 1.0) < 0.001
+            && abs(adj.offsetX) < 0.001
+            && abs(adj.offsetY) < 0.001
+        if isDefault {
+            framingSummary.stringValue = L10n.t("framing.default")
+            framingSummary.textColor = .tertiaryLabelColor
+            return
+        }
+        var parts: [String] = []
+        if abs(adj.zoom - 1.0) >= 0.001 {
+            parts.append(L10n.t("framing.zoom", Int((adj.zoom * 100).rounded())))
+        }
+        if abs(adj.offsetX) >= 0.001 {
+            // 正值向右；数值是相对画面宽度的比例，换算成百分数更好读
+            let pct = Int((adj.offsetX * 50).rounded())
+            parts.append(pct >= 0 ? L10n.t("framing.right", pct)
+                                  : L10n.t("framing.left", -pct))
+        }
+        if abs(adj.offsetY) >= 0.001 {
+            let pct = Int((adj.offsetY * 50).rounded())
+            parts.append(pct >= 0 ? L10n.t("framing.up", pct)
+                                  : L10n.t("framing.down", -pct))
+        }
+        framingSummary.stringValue = L10n.t("framing.summary", parts.joined(separator: " · "))
+        framingSummary.textColor = .secondaryLabelColor
     }
 
     private func applyButtEnabled(_ item: LibraryItem) {
