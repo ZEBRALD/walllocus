@@ -1,93 +1,109 @@
 ## 本次更新
 
-### 修复：拖入图片与拖拽应用壁纸
+> 说明：1.6.4 / 1.6.5 未单独发布，其内容已包含在本版中。
 
-上一版引入窗口 wrapper 后，**从访达拖图片进 App 会完全没反应**，拖拽壁纸到屏幕的提示卡片也消失了。
+## 新功能：把壁纸拖到屏幕上就应用
 
-两处都是同一个原因：拖放接收必须挂在窗口的直接内容视图上，wrapper 把 `DropZoneView` 降成了子视图。现已恢复直接挂载，窗口尺寸限制改用 `contentMinSize/MaxSize` 表达。
+按住图库里的任意壁纸，直接拖出窗口甩到某块屏幕上，松手即应用 —— **拖到哪块屏就应用到哪块屏**。
 
-同时修掉了几个拖拽相关的老问题：
+- 拖拽时每块屏幕中央浮现一个提示卡片，光标压在哪张上就高亮哪张
+- 拖到卡片外松手不会误应用
+- 拖到左栏的显示器行同样可以应用（更稳妥的路径）
+- 拖到桌面则把文件复制出去
+- 可在设置里关闭
 
-- **提示浮层不再闪烁**：光标掠过子视图时 AppKit 会发 `draggingExited`，之前据此隐藏浮层，导致反复显隐。现在只在放置完成、取消、或轮询确认鼠标真的离开窗口时才收起
-- **绿加号处处可见**：之前压在缩略图、预览图上时加号消失（系统问的是那些不接收文件的视图）。拖拽期间会在最上层铺一层接收面，任何位置都返回一致的接受状态（带连续采样，避免单次读取失败导致中途失效）
-- **拖拽绕圈久了不再偶发失效**
+## 左栏重新设计
 
-### 新功能：自动刷新图库
+- **显示器 / 壁纸库 / 预设三组各自独立选中** —— 可以同时选中「用这张图」和「投到那块屏」
+- 选中态改为**亮灰圆角底 + 亮蓝文字**，不再是整行系统蓝
+- 壁纸库分类显示该分类第一张图的**圆角方形缩略图**（与照片 App 一致，等比铺满并裁切）
+- 「全部」改用堆叠图标
+- 行高 33pt、缩略图 27pt、图标 22pt，列表更舒展
+- 顶部留白收紧，与底部对称
 
-以前只有添加文件后才刷新，现在：
+## 新功能：自动刷新图库
 
-| 触发时机 | 行为 |
-| --- | --- |
-| 切回 App（从访达回来） | 比对文件夹指纹 |
-| 切换壁纸库分类 | 同上 |
-| 切换显示器 | 同上 |
-| 启动 | 全量扫描一次 |
+以前只有添加文件后才刷新，现在切回 App、切换分类、切换显示器时都会比对**文件夹指纹**，磁盘真变了才重扫 —— 高频操作不会卡。
 
-用**目录修改时间指纹**判断，磁盘真变了才重扫 —— 切分类这类高频操作不会卡。
+## 新功能：分类右键菜单
 
-### 新功能：分类右键菜单
-
-右键左栏的分类文件夹：
-
-- **在访达中显示**
-- **移到废纸篓**（二次确认，整个文件夹可恢复）
+右键左栏的分类文件夹：**在访达中显示** / **移到废纸篓**（二次确认，可恢复）。
 
 「全部」不对应实际文件夹，因此没有菜单。
 
-### 修复：左栏信息框
+## 图库
 
-以前**没选中素材时它是空的**，只在选中后才显示显示器信息。但它是显示器状态（作用范围、分辨率、正在使用哪张壁纸），不该依赖素材选中。现已在两种路径下都正确显示。
+- 支持从图库把壁纸拖出
+- 「正在使用」绿点固定贴在**图片本身的左上角**，不再随横竖图比例漂移
 
-### 界面
+## 右栏
 
-- 预设的选中状态：点右栏（应用预设等操作）时保留，点中栏或左栏其它位置时清除
-- 修复左栏多行同时高亮（选中底块未重绘）
-- 分类切换时缩略图不再闪烁（缓存命中改为同步设图 + 结构未变时跳过重建）
+- 长文件名不再溢出：顶部标题**中间截断**，文件详情**按字符换行**
+
+## 修复
+
+- **从访达拖图片进 App 完全没反应** —— 窗口 wrapper 让拖放接收者不再是直接内容视图
+- **拖拽到屏幕的提示卡片不出现**
+- 拖入文件时提示浮层闪烁，偶尔导致拖放失败
+- 绿加号只在部分区域显示（压在缩略图/预览图上时消失）
+- 左栏信息框在未选中素材时是空的
+- 多行同时高亮（选中底块未重绘）
+- 新建分类时崩溃
+- 「保存当前为预设」弹出两个命名窗口
+- 选中素材时分辨率文字闪烁
+- 分类切换时缩略图闪烁
 
 ---
 
 ## What's changed
 
-### Fixed: dropped files and drag-to-apply
+> Note: 1.6.4 and 1.6.5 were never published separately; their contents are included here.
 
-The previous release introduced a wrapper view to fix window resizing, which **broke dropping files in entirely** and made the screen-target cards disappear.
+## New: drop a wallpaper onto a display to apply it
 
-Both had one cause: AppKit only delivers drops to a window's direct content view, and the wrapper demoted `DropZoneView` to a subview. It is the content view again, with the size limits expressed through `contentMinSize/MaxSize`.
+Pick up any wallpaper in the grid, drag it out of the window and release it over a display — that display takes it, and only that one.
 
-Several older drag problems went with it:
+- A hint card appears on each screen while dragging; the one under the pointer highlights
+- Releasing outside a card does nothing
+- Dropping on a display row in the sidebar works too
+- Dropping on the desktop copies the file out
+- Can be switched off in settings
 
-- **The import hint stopped flickering.** AppKit sends `draggingExited` when the pointer moves over a subview even though it is still inside the window; hiding on that event made the hint blink. It now retires only on a completed drop, on cancel, or when a poll confirms the pointer really left
-- **The green plus is visible everywhere.** It used to vanish over thumbnails and the preview because the system asked those views, which do not accept files. A full-window sink sits on top during a drag so every position answers the same way
-- **Long drags no longer lose the cursor feedback**
+## Sidebar, redrawn
 
-### New: the library refreshes on its own
+- **Displays, library and presets each keep their own selection**
+- Selection is a soft rounded fill with accent-coloured text, replacing the system blue
+- Categories show a rounded square thumbnail of their first image, filled and clipped like Photos
+- "All" uses the stacked-rectangle glyph
+- Rows 33pt, thumbnails 27pt, glyphs 22pt
+- The empty band above the first group trimmed to match the bottom
 
-It used to refresh only after adding files. Now:
+## New: the library refreshes on its own
 
-| Trigger | Behaviour |
-| --- | --- |
-| Returning to the app | Compare the folder fingerprint |
-| Switching category | Same |
-| Switching display | Same |
-| Launch | One full scan |
+A fingerprint of directory modification times is compared when the app becomes active, a category is chosen, or a display is picked. Only a real change triggers a rescan.
 
-A fingerprint of directory modification times decides whether a rescan is needed, so switching categories stays instant.
+## New: category context menu
 
-### New: category context menu
+Show in Finder, or move the whole folder to the Trash behind a confirmation. "All" has no folder, so it has no menu.
 
-Right-click a category in the sidebar:
+## Library
 
-- **Show in Finder**
-- **Move to Trash**, behind a confirmation — the whole folder, restorable
+- Wallpapers can be dragged out of the grid
+- The green "in use" dot sits on the image's own corner and stops drifting with aspect ratio
 
-"All" has no folder behind it, so it has no menu.
+## Detail pane
 
-### Fixed: the sidebar info box
+- Long file names stay inside the pane: the heading truncates in the middle, the file details wrap
 
-It showed nothing until a wallpaper was selected. But it reports display state — scope, resolution, and which wallpaper that display is using — so it no longer depends on an item being selected.
+## Fixes
 
-### Interface
-
-- Preset selection: kept when clicking the detail pane (where presets are applied), cleared when clicking the grid or elsewhere in the sidebar
-- Fixed multiple sidebar rows appearing highlighted at once, by invalidating the row when its selection changes
-- Category thumbnails no longer flicker when switching categories
+- **Dropping files in stopped working entirely** — a wrapper view made the drop target stop being the content view
+- **Screen drop targets for dragging wallpapers out disappeared**
+- The import hint flickered and could fail a drop
+- The green plus only appeared in some areas
+- The sidebar info box was empty until an item was selected
+- Multiple sidebar rows highlighted at once
+- Crash when creating a category
+- "Save as preset" opened two naming dialogs
+- Resolution text flickered on selection
+- Category thumbnails flickered when switching categories

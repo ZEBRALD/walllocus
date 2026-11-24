@@ -1168,6 +1168,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let pauseButton = NSButton(title: L10n.t("win.pause"), target: nil, action: nil)
     private let autoStartCheck = NSButton(checkboxWithTitle: L10n.t("win.launchAtLogin"), target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "")
+
+    /// 导入进行中的浮层（右下角，压在状态栏上方）
+    private var importBanner: NSView?
+    private var importLabel: NSTextField?
+    private var importIndicator: NSProgressIndicator?
+    /// 正在进行的导入批次计数。用计数而非布尔，才能正确处理并发导入。
+    private var importInFlight = 0
+    /// 结果浮标的显示序号，用于让旧的延时关闭失效
+    private var toastCount = 0
     private var appMenuAutoItem: NSMenuItem?
     private var statusAutoItem: NSMenuItem?
     private var fullscreenMenuItem: NSMenuItem?
@@ -1814,7 +1823,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         emptyLabel.isHidden = true
         libraryEmptyLabel = emptyLabel
 
-        for v in [toolbar, thumbnailGrid, emptyLabel] { pane.addSubview(v) }
+        // 导入进行中的浮标：压在中栏右上角，不参与布局，
+        // 因此不会挤动网格；导入结束后消失，不留下空位。
+        let banner = makeImportBanner()
+        importBanner = banner
+
+        for v in [toolbar, thumbnailGrid, emptyLabel, banner] { pane.addSubview(v) }
+
+        NSLayoutConstraint.activate([
+            banner.topAnchor.constraint(equalTo: pane.topAnchor, constant: 12),
+            banner.trailingAnchor.constraint(equalTo: pane.trailingAnchor, constant: -20),
+        ])
 
         NSLayoutConstraint.activate([
             // 添加按钮移到底部（用户更希望直接拖入图片），这里只留 0 高度占位
@@ -3410,17 +3429,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         refreshControls()
     }
 
-    /// 拖拽放入的处理：加入后给一行明确反馈
+    /// 拖拽放入的处理：加入后给一行明确反馈。
+    ///
+    /// 复制在后台进行，所以结果在回调里拿到 —— 期间导入浮标一直转着，
+    /// 用户不会面对一个毫无反应的窗口。
     private func handleDrop(_ paths: [String]) {
-        let added = addPaths(paths)
         let total = paths.count
-        if added == 0 {
-            // 全是不支持的类型，或全已存在
-            flashStatus(L10n.t("drop.nothingAdded"))
-        } else if added < total {
-            flashStatus(L10n.t("drop.addedPartial", added, total - added))
-        } else {
-            flashStatus(L10n.t("drop.added", added))
+        addPaths(paths) { [weak self] added in
+            guard let self else { return }
+            self.endImport()
+            if added == 0 {
+                // 全是不支持的类型，或全已存在
+                self.showToast(L10n.t("drop.nothingAdded"))
+            } else if added < total {
+                self.showToast(L10n.t("drop.addedPartial", added, total - added))
+            } else {
+                self.showToast(L10n.t("drop.added", added))
+            }
         }
     }
 
@@ -3490,15 +3515,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     /// 把一个外部文件复制进壁纸文件夹，返回新路径。
     /// 已经在文件夹内的文件原样返回，不重复复制。
-    private func importIntoWallpaperFolder(_ path: String) -> String {
+    /// 把外部文件复制进壁纸文件夹，返回落地路径。
+    /// 纯文件操作、不碰 UI 与状态 —— 会在后台线程调用，切勿在此访问状态或界面。
+    /// - Parameters:
+    ///   - path: 源文件绝对路径
+    ///   - category: 落地的分类子目录（空串 = 壁纸文件夹根）
+    private func importIntoWallpaperFolder(_ path: String, category: String? = nil) -> String {
         let fm = FileManager.default
         let folder = Settings.wallpaperFolder
         try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
 
         // 拖入时若正看着某个分类，就把文件放进那个子文件夹 ——
         // 否则文件进了根目录，在当前分类里根本看不到（用户以为没加成功）。
+        // 分类由调用方在主线程取好再传进来：这里可能跑在后台队列上。
         let destDir: URL
-        if let cat = libraryFilter, !cat.isEmpty {
+        let cat = category ?? ""
+        if !cat.isEmpty {
             let sub = folder.appendingPathComponent(cat, isDirectory: true)
             try? fm.createDirectory(at: sub, withIntermediateDirectories: true)
             destDir = sub
@@ -3767,45 +3799,168 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie,
                                      .image, .png, .jpeg, .heic, .tiff, .gif, .bmp, .webP]
         guard panel.runModal() == .OK else { return }
-        addPaths(panel.urls.map { $0.path })
+        let paths = panel.urls.map { $0.path }
+        let total = paths.count
+        addPaths(paths) { [weak self] added in
+            guard let self else { return }
+            self.endImport()
+            if added == 0 {
+                self.showToast(L10n.t("drop.nothingAdded"))
+            } else if added < total {
+                self.showToast(L10n.t("drop.addedPartial", added, total - added))
+            } else {
+                self.showToast(L10n.t("drop.added", added))
+            }
+        }
     }
 
     /// 把一组路径加入素材库（面板选择与拖拽共用）。
     /// 返回实际新增的数量，供调用方做提示。
     @discardableResult
-    func addPaths(_ paths: [String]) -> Int {
-        guard !paths.isEmpty else { return 0 }
+    /// 把外部文件加入壁纸库。
+    ///
+    /// 复制在后台队列执行 —— 大视频是几百 MB，同步复制会把整个窗口冻住，
+    /// 用户既看不到进度也不知道是否还活着。这里先在主线程把需要的值取好
+    /// （目标分类、支持的类型），再整批复制的活儿交给后台，完成后回主线程入库。
+    ///
+    /// - Parameter paths: 源文件绝对路径
+    /// - Parameter completion: 主线程回调，参数为新增数量
+    func addPaths(_ paths: [String], completion: ((Int) -> Void)? = nil) {
+        guard !paths.isEmpty else { completion?(0); return }
 
         // 只接受本应用能处理的类型，避免把随便什么文件塞进库里
         let supported = paths.filter { MediaTypes.isSupported($0) }
-        guard !supported.isEmpty else { return 0 }
+        guard !supported.isEmpty else { completion?(0); return }
 
-        // 统一收进壁纸文件夹：外部文件会被复制进来，
-        // 这样素材库的位置稳定，不依赖用户原始文件是否被移动或删除。
-        let usable = supported.map { importIntoWallpaperFolder($0) }
+        // 分类必须在主线程取：后台线程不能读 libraryFilter。
+        let category = libraryFilter ?? ""
 
-        var added = 0
-        StateStore.shared.update { st in
-            for path in usable where !st.library.contains(where: { $0.path == path }) {
-                st.library.append(LibraryItem(path: path, kind: MediaKind.detect(path)))
-                added += 1
+        beginImport(total: supported.count)
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            // 统一收进壁纸文件夹：外部文件会被复制进来，
+            // 这样素材库的位置稳定，不依赖用户原始文件是否被移动或删除。
+            var usable: [String] = []
+            usable.reserveCapacity(supported.count)
+            for p in supported {
+                usable.append(self.importIntoWallpaperFolder(p, category: category))
             }
-            // 只入库存档，不自动铺到任何屏幕上。
-            // 加了文件就悄悄改掉别人的桌面是意外行为 —— 要用哪张由用户
-            // 显式点「设为该屏壁纸」决定。
-        }
 
-        // 重扫文件夹：新文件已复制进磁盘，但库与分类都还是旧的。
-        // 不重扫的话，拖入后当前分类里看不到它（用户以为没加成功）。
-        scanWallpaperFolder()
-        reloadLibrary()
-        // 选中新加入的素材，方便用户接着决定要不要用它
-        if added > 0, state.library.contains(where: { $0.path == usable[0] }) {
-            StateStore.shared.update { $0.lastSelectedItem = usable[0] }
+            DispatchQueue.main.async {
+                var added = 0
+                StateStore.shared.update { st in
+                    for path in usable where !st.library.contains(where: { $0.path == path }) {
+                        st.library.append(LibraryItem(path: path, kind: MediaKind.detect(path)))
+                        added += 1
+                    }
+                    // 只入库存档，不自动铺到任何屏幕上。
+                    // 加了文件就悄悄改掉别人的桌面是意外行为 —— 要用哪张由用户
+                    // 显式点「设为该屏壁纸」决定。
+                }
+
+                // 重扫文件夹：新文件已复制进磁盘，但库与分类都还是旧的。
+                // 不重扫的话，拖入后当前分类里看不到它（用户以为没加成功）。
+                self.scanWallpaperFolder()
+                self.reloadLibrary()
+                // 选中新加入的素材，方便用户接着决定要不要用它
+                if added > 0, self.state.library.contains(where: { $0.path == usable[0] }) {
+                    StateStore.shared.update { $0.lastSelectedItem = usable[0] }
+                }
+                // 只刷新界面，不重铺壁纸 —— assignment 没变，重铺纯属多余。
+                self.refreshControls()
+                completion?(added)
+            }
         }
-        // 只刷新界面，不重铺壁纸 —— assignment 没变，重铺纯属多余。
-        refreshControls()
-        return added
+    }
+
+    // MARK: 导入进度
+
+    /// 构建导入浮标：一枚圆角胶囊 + 转圈 + 文案。
+    /// 用视觉分层而非边框，避免在中栏淡色玻璃上显得突兀。
+    private func makeImportBanner() -> NSView {
+        let box = NSView()
+        box.translatesAutoresizingMaskIntoConstraints = false
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 9
+        box.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.42).cgColor
+        box.isHidden = true
+
+        let spinner = NSProgressIndicator()
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(labelWithString: L10n.t("import.inProgress", 0))
+        label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .white
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        box.addSubview(spinner)
+        box.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            spinner.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: 10),
+            spinner.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+            spinner.widthAnchor.constraint(equalToConstant: 12),
+            spinner.heightAnchor.constraint(equalToConstant: 12),
+
+            label.leadingAnchor.constraint(equalTo: spinner.trailingAnchor, constant: 7),
+            label.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -12),
+            label.centerYAnchor.constraint(equalTo: box.centerYAnchor),
+
+            box.heightAnchor.constraint(equalToConstant: 26),
+        ])
+
+        importLabel = label
+        importIndicator = spinner
+        return box
+    }
+
+    /// 进入「正在导入」状态：显示浮层、开始加载指示。
+    /// 用户此刻应立即看到反馈 —— 大文件复制要好几秒，没有提示就像卡死。
+    private func beginImport(total: Int) {
+        importInFlight += 1
+        // 导入开始要取消可能还在显示的结果浮标，
+        // 否则「已添加 3 个」会和转圈同时挂在那儿，自相矛盾。
+        NSObject.cancelPreviousPerformRequests(withTarget: self,
+                                               selector: #selector(hideToast),
+                                               object: nil)
+        toastCount = 0
+        importLabel?.stringValue = L10n.t("import.inProgress", total)
+        importIndicator?.startAnimation(nil)
+        importBanner?.isHidden = false
+    }
+
+    /// 在导入浮标上显示一条结果，几秒后消失。
+    /// 底栏已被移除（statusLabel 永远隐藏），所以结果提示复用同一个浮标位，
+    /// 把转圈换成对勾、把文案换成结果 —— 位置不变，用户的视线不用移动。
+    private func showToast(_ message: String) {
+        toastCount += 1
+        importIndicator?.stopAnimation(nil)
+        importLabel?.stringValue = message
+        importBanner?.isHidden = false
+        NSObject.cancelPreviousPerformRequests(withTarget: self,
+                                               selector: #selector(hideToast),
+                                               object: nil)
+        perform(#selector(hideToast), with: nil, afterDelay: 2.6)
+    }
+
+    @objc private func hideToast() {
+        // 还有别的批次在导入就不要关，交给最后那批收尾
+        guard importInFlight == 0 else { return }
+        importBanner?.isHidden = true
+    }
+
+    /// 退出「正在导入」状态。用计数而非布尔，
+    /// 是为了处理「导入过程中又拖进来一批」——先结束的那批不该把指示器关掉。
+    /// 注意这里**不隐藏浮标**：紧随其后的结果提示要复用同一个位置，
+    /// 先隐藏会让浮标闪一下再出现。
+    private func endImport() {
+        importInFlight = max(0, importInFlight - 1)
+        guard importInFlight == 0 else { return }
+        importIndicator?.stopAnimation(nil)
     }
 
     @objc private func assignToTarget() {
