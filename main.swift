@@ -425,7 +425,31 @@ final class WallpaperView: NSView {
     var mediaSize: CGSize = .zero { didSet { layoutMedia() } }
     var kind: MediaKind = .video { didSet { layoutMedia() } }
     /// 当前生效的调整量（由管理器按 屏×项目 查出后灌入）
-    var adjustment = Adjustment() { didSet { layoutMedia() } }
+    var adjustment = Adjustment() {
+        didSet {
+            layoutMedia()
+            // 播放速度同样属于「屏 × 项目」的属性，跟着 adjustment 一起下发。
+            // 只在该值真的变化时才碰播放器，避免每次刷新都打断播放。
+            if oldValue.playbackRate != adjustment.playbackRate {
+                applyPlaybackRate()
+            }
+        }
+    }
+
+    /// 把 adjustment.playbackRate 应用到当前播放器。
+    ///
+    /// 不能直接写 player.rate —— 设 rate 会同时改变「播放/暂停」状态：
+    /// 暂停中的壁纸会被这次设置意外启动。正确做法是设 defaultRate，
+    /// 再只在本来就播放着的时候把 rate 跟上去。
+    func applyPlaybackRate() {
+        // 播放器由管理器持有，这里从图层反查，避免视图再存一份引用
+        guard let p = playerLayer.player else { return }
+        let r = Float(max(0.25, min(2.0, adjustment.playbackRate)))
+        p.defaultRate = r
+        if p.timeControlStatus == .playing {
+            p.rate = r
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -804,6 +828,16 @@ final class WallpaperManager {
         }
     }
 
+    /// 把某个素材的播放速度应用到正在显示它的那些屏。
+    /// 不重建窗口：改速度不该让视频重新开始。
+    func applyPlaybackRateTo(path: String) {
+        let state = StateStore.shared.state
+        for (id, entry) in entries where entry.path == path {
+            let adj = state.adjustment(display: id, item: path)
+            entry.view.adjustment = adj        // didSet 会顺手应用速度
+        }
+    }
+
     /// 只切换已有播放器的静音状态。
     ///
     /// 静音是全局开关，改它不该重建壁纸窗口：
@@ -926,6 +960,12 @@ final class WallpaperManager {
         return e
     }
 
+    /// 查「这块屏 × 这个素材」的播放速度
+    private func rateFor(path: String, id: String) -> Float {
+        let adj = StateStore.shared.state.adjustment(display: id, item: path)
+        return Float(max(0.25, min(2.0, adj.playbackRate)))
+    }
+
     private func setupVideo(_ entry: Entry, path: String, muted: Bool, id: String) {
         let item = AVPlayerItem(url: URL(fileURLWithPath: path))
         // 降低解码与缓冲开销：只保留回放所需能力
@@ -937,7 +977,8 @@ final class WallpaperManager {
         player.actionAtItemEnd = .none
         // 壁纸不需要音频管线与音视频同步信息展示
         player.preventsDisplaySleepDuringVideoPlayback = false
-        player.defaultRate = 1.0
+        // 每个「屏 × 素材」各有自己的速度，建播放器时就按它初始化
+        player.defaultRate = rateFor(path: path, id: id)
         entry.view.showVideo(player)
         entry.view.mediaSize = .zero
         let token = NotificationCenter.default.addObserver(
@@ -1190,6 +1231,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private let offYSlider = NSSlider(value: 0, minValue: -1, maxValue: 1, target: nil, action: nil)
     private let offYValue = NSTextField(string: "0.00")
     private let muteCheck = NSButton(checkboxWithTitle: L10n.t("win.muteVideo"), target: nil, action: nil)
+    /// 播放速度分段控件（仅视频可见）
+    private let rateControl = NSSegmentedControl(labels: ["0.5×", "1×", "1.5×", "2×"],
+                                                 trackingMode: .selectOne,
+                                                 target: nil, action: nil)
+    /// 速度整行（含标题），图片时整体隐藏
+    private var rateRow: NSStackView?
+    /// 自定义速度输入框：预设档位之外的任意值
+    private let rateField = NSTextField(string: "1.0")
     private let pauseButton = NSButton(title: L10n.t("win.pause"), target: nil, action: nil)
     private let autoStartCheck = NSButton(checkboxWithTitle: L10n.t("win.launchAtLogin"), target: nil, action: nil)
     private let statusLabel = NSTextField(labelWithString: "")
@@ -2037,6 +2086,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 静音是**全局开关**（作用于所有视频壁纸），与「某屏 × 某图」的
         // 构图调整不是一类东西，所以单独一个 action。
         // 共用 adjustmentChanged 会让它被构图那条路径的刷新覆盖。
+        // 播放速度：只对视频有意义。分段控件比四个单选按钮紧凑，
+        // 也不引入额外的子菜单层级。
+        rateControl.target = self
+        rateControl.action = #selector(rateChanged)
+        rateControl.controlSize = .small
+        rateControl.segmentStyle = .rounded
+        rateControl.translatesAutoresizingMaskIntoConstraints = false
+        rateControl.selectedSegment = 1   // 默认 1×
+
+        let rateTitle = NSTextField(labelWithString: L10n.t("win.playbackRate"))
+        rateTitle.font = NSFont.systemFont(ofSize: 11)
+        rateTitle.textColor = .secondaryLabelColor
+        rateTitle.alignment = .left
+
+        // 自定义输入：预设四档之外还想用 0.8× 这类值时有个去处。
+        // 复用与缩放/偏移相同的数值框样式，保证视觉一致。
+        rateField.cell = VerticallyCenteredFieldCell()
+        rateField.isEditable = true
+        rateField.isSelectable = true
+        rateField.alignment = .right
+        styleRoundedField(rateField, height: 22, inset: 5)
+        rateField.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        rateField.target = self
+        rateField.action = #selector(rateFieldCommitted)
+        rateField.delegate = self
+        rateField.translatesAutoresizingMaskIntoConstraints = false
+        rateField.widthAnchor.constraint(equalToConstant: 56).isActive = true
+
+        // 分段控件吃掉剩余宽度、输入框定宽，整行跟着栏宽伸缩。
+        // 不给分段控件加宽约束的话，NSStackView 会把它压到最小固有宽度，
+        // 右侧留出一大片空白，与上面几条滑块行的视觉节奏对不上。
+        // NSSegmentedControl 的固有宽度不会被 stack 拉开（hugging 优先级对它无效），
+        // 想让每段等分整行，只能给一个「等宽」的强约束。
+        rateControl.segmentDistribution = .fillEqually
+        rateControl.setContentHuggingPriority(.init(1), for: .horizontal)
+        rateControl.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+
+        let rateControls = NSStackView(views: [rateControl, rateField])
+        rateControls.orientation = .horizontal
+        rateControls.alignment = .centerY
+        rateControls.spacing = 8
+        rateControls.translatesAutoresizingMaskIntoConstraints = false
+
+        // 标题单独放进一个左对齐容器：
+        // 竖栈用 .width 之后子视图会等宽铺满，NSTextField 会把自己的文字居中，
+        // 「播放速度」就跑到右半边去了。包一层让标题留在左边。
+        let titleRow = NSStackView(views: [rateTitle])
+        titleRow.orientation = .horizontal
+        titleRow.alignment = .centerY
+        titleRow.translatesAutoresizingMaskIntoConstraints = false
+        rateTitle.setContentHuggingPriority(.init(1), for: .horizontal)
+
+        let rateStack = NSStackView(views: [titleRow, rateControls])
+        rateStack.orientation = .vertical
+        // .width 让竖栈里的子视图与栈等宽（.leading 只会贴左、不拉伸），
+        // 这样分段控件和输入框才会跟随栏宽。
+        rateStack.alignment = .width
+        rateStack.spacing = 6
+        rateStack.translatesAutoresizingMaskIntoConstraints = false
+
+        // 与滑块行一致：宽度跟随栏宽（由 syncDetailDocSize 更新 constant）
+        let rowW = rateStack.widthAnchor.constraint(equalToConstant: 270)
+        detailWidthConstraints.append(rowW)
+        // 整行铺满：分段控件吃掉除输入框外的全部宽度。
+        // 只让外层 stack 等宽不够 —— NSStackView 内部的水平栈仍需知道
+        // 谁该被拉伸，否则两个子视图都保持固有宽度、中间空出一块。
+        let ctrW = rateControls.widthAnchor.constraint(equalTo: rateStack.widthAnchor)
+        ctrW.priority = .init(999)
+        ctrW.isActive = true
+        // 分段控件吃满「容器宽 - 输入框宽 - 间距」
+        let segW = rateControl.widthAnchor.constraint(
+            equalTo: rateControls.widthAnchor, constant: -(56 + 8))
+        segW.isActive = true
+
+        rateRow = rateStack
+        root.addArrangedSubview(rateStack)
+
         muteCheck.target = self
         muteCheck.action = #selector(muteChanged)
         muteCheck.state = state.muted ? .on : .off
@@ -3308,6 +3434,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         offXSlider.doubleValue = adj.offsetX
         offYSlider.doubleValue = adj.offsetY
         muteCheck.state = state.muted ? .on : .off
+        // 速度控件只对视频出现：图片没有「快放」这个概念，
+        // 显示一个永远无效的控件只会让人困惑。
+        let isVideo = (item.kind == .video)
+        rateRow?.isHidden = !isVideo
+        if isVideo {
+            // 值与某个预设档位吻合就高亮它；自定义值则取消选中，
+            // 否则分段控件会假装选中 1× 而实际跑在 1.37×，自相矛盾。
+            if let idx = Adjustment.rateOptions.firstIndex(where: {
+                abs($0 - adj.playbackRate) < 0.001
+            }) {
+                rateControl.selectedSegment = idx
+            } else {
+                rateControl.selectedSegment = -1
+            }
+            // 输入框跟随显示当前值（两位小数足够表达 0.25–2.0）。
+            // 用户正在编辑时不要覆盖 —— 否则刚敲到一半就被重置。
+            let editing = (rateField.currentEditor() != nil)
+            let s = String(format: "%.2f", adj.playbackRate)
+            if !editing, rateField.stringValue != s {
+                rateField.stringValue = s
+            }
+        }
         applyButtEnabled(item)
         updateValueLabels()
         updateStatus()
@@ -3330,6 +3478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         offXValue.isEnabled = on
         offYValue.isEnabled = on
         muteCheck.isEnabled = on
+        rateControl.isEnabled = on
         assignButton.isEnabled = on
         removeButton.isEnabled = on
     }
@@ -4589,6 +4738,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         if alert.runModal() == .alertFirstButtonReturn {
             revealWallpaperFolder()
         }
+    }
+
+    /// 播放速度：属于「屏 × 素材」的属性，只影响当前选中的这项。
+    @objc private func rateChanged() {
+        let idx = rateControl.selectedSegment
+        guard idx >= 0, idx < Adjustment.rateOptions.count else { return }
+        applyPlaybackRate(Adjustment.rateOptions[idx])
+    }
+
+    /// 自定义速度输入：接受 "1.5"、"1.5x"、"150%" 这类写法。
+    @objc private func rateFieldCommitted() {
+        let raw = rateField.stringValue
+            .replacingOccurrences(of: "×", with: "")
+            .replacingOccurrences(of: "x", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        let hadPercent = raw.contains("%")
+        var v = Double(raw.replacingOccurrences(of: "%", with: "")) ?? 1.0
+        // 写成 150% 时按百分比解释；否则按倍率
+        if hadPercent { v = v / 100.0 }
+        applyPlaybackRate(v)
+    }
+
+    /// 统一的速度落地点：夹紧范围、写入该屏该素材、应用、刷新。
+    private func applyPlaybackRate(_ raw: Double) {
+        guard let item = selectedItem, item.kind == .video else { return }
+        // 0.25–2.0：再高硬件解码吃力、CPU 明显上升；再低几乎看不出画面在动
+        let rate = max(0.25, min(2.0, raw))
+
+        StateStore.shared.update { st in
+            for s in self.targetScreens {
+                let id = screenID(s)
+                var adj = st.adjustment(display: id, item: item.path)
+                adj.playbackRate = rate
+                st.setAdjustment(adj, display: id, item: item.path)
+            }
+        }
+        // 只改播放速率，不重建壁纸窗口 —— 重建会让视频从头开始
+        WallpaperManager.shared.applyPlaybackRateTo(path: item.path)
+        // 输入框要立刻显示**实际生效**的值：用户输入 3.00 会被夹到 2.0，
+        // 若框里还留着 3.00，界面就在撒谎。
+        rateField.stringValue = String(format: "%.2f", rate)
+        refreshControls()
     }
 
     /// 静音开关：全局生效，不涉及任何单屏/单图状态。

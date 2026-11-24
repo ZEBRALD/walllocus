@@ -17,8 +17,43 @@ struct Adjustment: Codable, Equatable {
     var zoom: Double = 1.0
     var offsetX: Double = 0.0
     var offsetY: Double = 0.0
+    /// 视频播放速度（仅对视频有意义，图片忽略）
+    var playbackRate: Double = 1.0
 
     static let `default` = Adjustment()
+
+    /// 可选播放速度档位
+    static let rateOptions: [Double] = [0.5, 1.0, 1.5, 2.0]
+
+    enum CodingKeys: String, CodingKey {
+        case mode, zoom, offsetX, offsetY, playbackRate
+    }
+
+    init() {}
+
+    init(mode: ScaleMode, zoom: Double, offsetX: Double, offsetY: Double,
+         playbackRate: Double = 1.0) {
+        self.mode = mode
+        self.zoom = zoom
+        self.offsetX = offsetX
+        self.offsetY = offsetY
+        self.playbackRate = playbackRate
+    }
+
+    /// 手写解码：新版本加字段时必须让旧数据仍能读出。
+    ///
+    /// Swift 自动合成的解码器对**非 Optional 的新字段**只会在 key 缺失时抛
+    /// keyNotFound —— 结果是升级后 adjustments 整块解析失败，
+    /// 用户为每块屏调过的构图全部丢失（这个项目踩过一次）。
+    /// 所以逐字段 decodeIfPresent 并给默认值。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decodeIfPresent(ScaleMode.self, forKey: .mode) ?? .fill
+        zoom = try c.decodeIfPresent(Double.self, forKey: .zoom) ?? 1.0
+        offsetX = try c.decodeIfPresent(Double.self, forKey: .offsetX) ?? 0.0
+        offsetY = try c.decodeIfPresent(Double.self, forKey: .offsetY) ?? 0.0
+        playbackRate = try c.decodeIfPresent(Double.self, forKey: .playbackRate) ?? 1.0
+    }
 }
 
 enum Rendering {
