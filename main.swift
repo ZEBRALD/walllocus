@@ -721,6 +721,21 @@ enum Settings {
     }
 
     /// 右栏宽度
+    /// 网格列数：3 / 5 / 7 / 9（照片 App 的档位）
+    static var gridColumnCount: Int {
+        get {
+            let v = UserDefaults.standard.integer(forKey: "gridColumnCount")
+            return v == 3 || v == 5 || v == 7 || v == 9 ? v : 5
+        }
+        set { UserDefaults.standard.set(newValue, forKey: "gridColumnCount") }
+    }
+
+    /// 网格样式：false = 间距网格（保持原比例），true = 正方形填充
+    static var gridSquareFill: Bool {
+        get { UserDefaults.standard.bool(forKey: "gridSquareFill") }
+        set { UserDefaults.standard.set(newValue, forKey: "gridSquareFill") }
+    }
+
     /// 右栏是否折叠（持久化：用户收起后重启不该又展开）
     static var detailPaneCollapsed: Bool {
         get { UserDefaults.standard.bool(forKey: "detailPaneCollapsed") }
@@ -1290,14 +1305,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private var didFinishInitialScan = false
     /// 文件分辨率缓存（路径 → "宽x高"），避免重复异步解析导致文字闪烁
     private var resolutionCache: [String: String] = [:]
-    private let settingsButton = NSButton(title: "", target: nil, action: nil)
+    private let settingsButton = CircleGlassButton()
     /// 折叠右栏按钮：浏览大量壁纸时把操作栏收起来，让中栏独享宽度
-    private let collapseButton = NSButton(title: "", target: nil, action: nil)
+    private let collapseButton = CircleGlassButton()
+    /// 返回上一级目录（仅在子文件夹内可见）
+    private let backButton = CircleGlassButton()
+    /// 网格列数减 / 加（步长 2，范围 3...9）
+    private let colMinusButton = CircleGlassButton()
+    private let colPlusButton = CircleGlassButton()
+    /// 网格样式切换：间距网格 ↔ 正方形填充
+    private let gridStyleButton = CircleGlassButton()
+    /// 搜索折叠态的圆钮
+    private let searchToggleButton = CircleGlassButton()
+    /// 标题组（返回按钮 + 标题两行），整体绑定到左栏右缘
+    private weak var titleRowStack: NSStackView?
+    /// 搜索框展开态的宽度约束（响应式变形时调整）
+    private var searchWidthConstraint: NSLayoutConstraint?
+    /// 工具区 stack（列数、样式、搜索、加号、齿轮、折叠）
+    private weak var toolsStack: NSStackView?
+    /// 搜索框是否处于展开态（窄窗口下收成圆钮）
+    private var searchExpanded = false
     /// 右栏是否处于折叠状态
     private var detailCollapsed = Settings.detailPaneCollapsed
     private let addButton = NSButton(title: "", target: nil, action: nil)
     /// 顶栏的「添加壁纸」按钮（加号）
-    private let addFilesButton = NSButton(title: "", target: nil, action: nil)
+    private let addFilesButton = CircleGlassButton()
     private let paneTitle = NSTextField(labelWithString: "")
     /// 顶栏渐变模糊的遮罩（需要在 resize 时同步 frame）
     private var topFadeLayer: CAGradientLayer?
@@ -1464,6 +1496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
         buildMenu()
         reloadScreens()
+        ThumbnailItem.fillsSquare = Settings.gridSquareFill
         buildWindow()
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
         }
@@ -1792,8 +1825,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
             // 算出的卡片偏大 → 这一帧是 4 列，下一帧又变 5 列，来回跳。
             // 推到下一轮 runloop，此时新宽度已生效，一次算准。
             DispatchQueue.main.async {
-                self?.updateMiddleWidth()
-            self?.relayoutGridColumns()
+                guard let self else { return }
+                self.updateMiddleWidth()
+                self.relayoutGridColumns()
+                self.updateSearchForm()
+                // 窗口缩放后 AppKit 会重置红绿灯位置，需要重新对齐。
+                //
+                // 但不能在这一帧对齐：拖动窗口边缘时布局与 AppKit 的按钮复位
+                // 在同一帧内反复交替，直接改 frame 会看到按钮持续抖动。
+                // 交给下一次 runloop，等本轮布局彻底落定再对齐一次。
+                if let w = self.window {
+                    DispatchQueue.main.async { self.alignTrafficLights(w) }
+                }
             }
         }
 
@@ -1931,7 +1974,130 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         }
     }
 
+/// 不参与命中测试的 NSVisualEffectView。
+/// 作为按钮的圆底时，它铺满整个按钮；不穿透的话点击全被它吃掉。
+final class PassthroughEffectView: NSVisualEffectView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// 不参与命中测试的 NSImageView，理由同上（图标盖在按钮中心）。
+final class PassthroughImageView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// 圆形 LiquidGlass 按钮。
+///
+/// 圆底是真正的 NSVisualEffectView（.popover），不是半透明色块，
+/// 所以能透出背后内容并有真实模糊。
+///
+/// 两个子视图都改用 Passthrough 版本：否则点击落在图标或材质上时，
+/// 事件被子视图吃掉、按钮收不到，表现为「点了没反应」。
+/// 注意**不要**覆盖按钮自身的 hitTest —— 那会破坏 NSButton 的追踪逻辑。
+final class CircleGlassButton: NSButton {
+    var diameter: CGFloat = 34
+
+    private let backing = PassthroughEffectView()
+    private let iconView = PassthroughImageView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        common()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        common()
+    }
+
+    private func common() {
+        title = ""
+        isBordered = false
+        bezelStyle = .regularSquare
+        imagePosition = .noImage
+        wantsLayer = true
+
+        backing.material = .popover
+        backing.blendingMode = .withinWindow
+        backing.state = .active
+        backing.translatesAutoresizingMaskIntoConstraints = false
+        backing.wantsLayer = true
+        backing.layer?.masksToBounds = true
+        backing.layer?.borderWidth = 0.65
+        backing.layer?.borderColor = NSColor.white.withAlphaComponent(0.42).cgColor
+        addSubview(backing)
+
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.contentTintColor = .white
+        addSubview(iconView)
+
+        NSLayoutConstraint.activate([
+            backing.centerXAnchor.constraint(equalTo: centerXAnchor),
+            backing.centerYAnchor.constraint(equalTo: centerYAnchor),
+            backing.widthAnchor.constraint(equalToConstant: diameter),
+            backing.heightAnchor.constraint(equalToConstant: diameter),
+
+            iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 16),
+            iconView.heightAnchor.constraint(equalToConstant: 16),
+        ])
+    }
+
+    func setSymbol(_ name: String, pointSize: CGFloat = 15) {
+        let cfg = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
+        iconView.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg)
+    }
+
+    override func layout() {
+        super.layout()
+        let d = min(bounds.width, bounds.height)
+        backing.layer?.cornerRadius = d / 2
+        backing.alphaValue = isEnabled ? 1.0 : 0.55
+    }
+}
     // MARK: 顶栏
+
+    /// 把按钮配置成圆形 LiquidGlass 样式。
+    private func styleCircleButton(_ button: NSButton,
+                                   symbol: String,
+                                   tooltip: String,
+                                   diameter: CGFloat = 34) {
+        if let circle = button as? CircleGlassButton {
+            circle.diameter = diameter
+            circle.setSymbol(symbol)
+        } else {
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
+            button.contentTintColor = .white
+        }
+        button.title = ""
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.toolTip = tooltip
+        button.translatesAutoresizingMaskIntoConstraints = false
+
+        let w = button.widthAnchor.constraint(equalToConstant: diameter)
+        let h = button.heightAnchor.constraint(equalToConstant: diameter)
+        w.priority = .required
+        h.priority = .required
+        w.isActive = true
+        h.isActive = true
+    }
+
+    /// 给圆形按钮垫一层真实的模糊材质。
+    /// 直接给 button 设 backgroundColor 只是半透明色块，没有模糊。
+    private func glassBacking(for button: NSButton, diameter: CGFloat = 30) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = .popover
+        v.blendingMode = .withinWindow
+        v.state = .active
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.wantsLayer = true
+        v.layer?.cornerRadius = diameter / 2
+        v.layer?.masksToBounds = true
+        return v
+    }
 
     private func buildTopBar() -> NSView {
         let bar = NSView()
@@ -2005,82 +2171,239 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         searchPlaceholderConstraint = searchField.leadingAnchor.constraint(
             equalTo: bar.leadingAnchor, constant: 700)
         searchPlaceholderConstraint.priority = .init(250)
-        // 添加壁纸（加号）：与齿轮同款样式
-        addFilesButton.image = NSImage(systemSymbolName: "plus",
-                                       accessibilityDescription: L10n.t("win.addFiles"))
-        addFilesButton.bezelStyle = .rounded
+        // ── 圆形按钮：返回 / 列数 / 样式 / 搜索 / 加号 / 齿轮 / 折叠 ──
+        styleCircleButton(backButton, symbol: "chevron.left",
+                          tooltip: L10n.t("top.back"))
+        backButton.target = self
+        backButton.action = #selector(goBackFolder)
+
+        styleCircleButton(colMinusButton, symbol: "minus",
+                          tooltip: L10n.t("top.fewerColumns"))
+        colMinusButton.target = self
+        colMinusButton.action = #selector(stepColumnsDown)
+
+        styleCircleButton(colPlusButton, symbol: "plus",
+                          tooltip: L10n.t("top.moreColumns"))
+        colPlusButton.target = self
+        colPlusButton.action = #selector(stepColumnsUp)
+
+        styleCircleButton(gridStyleButton, symbol: "square.grid.2x2",
+                          tooltip: L10n.t("top.gridStyle"))
+        gridStyleButton.target = self
+        gridStyleButton.action = #selector(toggleGridStyle)
+
+        styleCircleButton(searchToggleButton, symbol: "magnifyingglass",
+                          tooltip: L10n.t("top.search"))
+        searchToggleButton.target = self
+        searchToggleButton.action = #selector(expandSearch)
+
+        styleCircleButton(addFilesButton, symbol: "plus",
+                          tooltip: L10n.t("win.addFiles"))
         addFilesButton.target = self
         addFilesButton.action = #selector(addFiles)
-        addFilesButton.translatesAutoresizingMaskIntoConstraints = false
 
-        // 设置齿轮
-        settingsButton.image = NSImage(systemSymbolName: "gearshape",
-                                       accessibilityDescription: L10n.t("top.settings"))
-        settingsButton.bezelStyle = .rounded
+        styleCircleButton(settingsButton, symbol: "gearshape",
+                          tooltip: L10n.t("top.settings"))
         settingsButton.target = self
         settingsButton.action = #selector(showSettingsMenu)
-        settingsButton.translatesAutoresizingMaskIntoConstraints = false
 
-        collapseButton.image = NSImage(systemSymbolName: "sidebar.right",
-                                       accessibilityDescription: nil)
-        collapseButton.bezelStyle = .rounded
+        styleCircleButton(collapseButton, symbol: "sidebar.right",
+                          tooltip: L10n.t("win.toggleDetail"))
         collapseButton.target = self
         collapseButton.action = #selector(toggleDetailPane)
-        collapseButton.toolTip = L10n.t("win.toggleDetail")
-        collapseButton.translatesAutoresizingMaskIntoConstraints = false
 
-        bar.addSubview(title)
-        bar.addSubview(subtitle)
-        bar.addSubview(searchField)
-        bar.addSubview(settingsButton)
-        bar.addSubview(addFilesButton)
-        bar.addSubview(collapseButton)
+        // 搜索框：展开态宽度由约束驱动，不写死数值
+        searchField.isHidden = true
+        searchWidthConstraint = searchField.widthAnchor.constraint(equalToConstant: 180)
+
+        // 标题组：返回按钮 + 两行文字。rebindTitleToSidebar 会把整组绑到左栏右缘。
+        let titleText = NSStackView(views: [title, subtitle])
+        titleText.orientation = .vertical
+        titleText.alignment = .leading
+        titleText.spacing = 1
+        titleText.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleRow = NSStackView(views: [backButton, titleText])
+        titleRow.orientation = .horizontal
+        titleRow.alignment = .centerY
+        titleRow.spacing = 8
+        titleRow.translatesAutoresizingMaskIntoConstraints = false
+        titleRowStack = titleRow
+
+        // 工具区：搜索放最右。
+        //
+        // 搜索框展开时宽度会变化；若它在中间，右侧按钮会被反复推挤 ——
+        // 放到末尾后，其余按钮位置恒定，只有搜索自身伸缩。
+        let tools = NSStackView(views: [colMinusButton, colPlusButton, gridStyleButton,
+                                        addFilesButton, settingsButton, collapseButton,
+                                        searchToggleButton, searchField])
+        tools.orientation = .horizontal
+        tools.alignment = .centerY
+        tools.spacing = 8
+        tools.translatesAutoresizingMaskIntoConstraints = false
+        toolsStack = tools
+
+        bar.addSubview(titleRow)
+        bar.addSubview(tools)
         self.topTitle = title
         self.topTitleView = title
         self.topBarHost = bar
         self.topSubtitle = subtitle
 
         NSLayoutConstraint.activate([
-            // 标题紧跟 logo + 软件名之后，两行整体垂直居中于 logo
-            // 位置在这里只是占位，稍后 rebindTitle() 会改成绑定左栏右缘
-            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 200),
-            subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 1),
-            // 用「标题组中心 = logo 中心」实现对齐（logo 中心在 container.top + 47）
-            subtitle.centerYAnchor.constraint(equalTo: bar.topAnchor,
-                                                constant: 47 + 9),
+            // 标题行：初始占位，稍后 rebindTitle 会绑到左栏右缘
+            titleRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 200),
+            // 浮栏内容垂直位置：47 → 22（上移 25）→ 30（下移 8）
+            titleRow.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 30),
 
-            settingsButton.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 47),
-            settingsButton.widthAnchor.constraint(equalToConstant: 30),
-            settingsButton.heightAnchor.constraint(equalToConstant: 28),
+            // 工具区贴右缘，垂直居中
+            tools.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
+            tools.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 30),
 
-            // 折叠按钮：最右，与齿轮同尺寸
-            // 绑 topBar 自己的右缘即可：topBar 横跨整窗（leading/trailing 都
-            // 绑 container），所以无论右栏展开还是折叠，这个位置都不变。
-            // 关键是不能让它随「搜索框 + 右栏」那条链算出来 ——
-            // 折叠时右栏移出窗口，链条一变按钮就被推出可视区，用户再也展不开。
-            collapseButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
-            collapseButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
-            collapseButton.widthAnchor.constraint(equalToConstant: 30),
-            collapseButton.heightAnchor.constraint(equalToConstant: 28),
-
-            // 齿轮排到折叠按钮左边
-            settingsButton.trailingAnchor.constraint(equalTo: collapseButton.leadingAnchor, constant: -8),
-
-            // 加号按钮：与齿轮同尺寸、同高度，排在它左边
-            addFilesButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -8),
-            addFilesButton.centerYAnchor.constraint(equalTo: settingsButton.centerYAnchor),
-            addFilesButton.widthAnchor.constraint(equalToConstant: 30),
-            addFilesButton.heightAnchor.constraint(equalToConstant: 28),
-
-            searchField.trailingAnchor.constraint(equalTo: addFilesButton.leadingAnchor, constant: -10),
-            searchField.centerYAnchor.constraint(equalTo: bar.topAnchor, constant: 47),
-            // 搜索框左缘贴右栏左缘由 rebindTitleToSidebar() 在视图就位后绑定
-            searchPlaceholderConstraint,
-            // 与齿轮同高，视觉上三者（logo/搜索/齿轮）在同一条水平线上
-            searchField.heightAnchor.constraint(equalToConstant: 28),
+            // 搜索框展开态：与按钮同高
+            searchField.heightAnchor.constraint(equalToConstant: 30),
+            searchWidthConstraint!,
         ])
         return bar
+    }
+
+    // MARK: 浮栏按钮动作
+
+    /// 返回上一级目录。根目录时按钮本来就隐藏，这里再兜一层。
+    @objc private func goBackFolder() {
+        guard let cur = libraryFilter, !cur.isEmpty else { return }
+        // 只支持一层子目录，所以上一级就是根目录。
+        // 仍按「最后一个 / 之前」来算，将来支持多级时不用改这里。
+        let parent: String?
+        if let i = cur.lastIndex(of: "/") {
+            parent = String(cur[cur.startIndex..<i])
+        } else {
+            parent = nil
+        }
+        sidebarSelectionChanged(.library(parent))
+        sidebar.select(.library(parent))
+    }
+
+    /// 列数档位（与照片 App 一致：3 / 5 / 7 / 9）。
+    private static let columnSteps = [3, 5, 7, 9]
+
+    /// 把任意值夹到最近的合法档位。
+    ///
+    /// 不能用 `firstIndex(of:)` + `guard let` —— 一旦设置里存了非档位值
+    /// （手动 defaults write、旧版本残留等），索引为 nil，动作直接静默返回，
+    /// 表现就是「按钮点上去完全没反应」，而不是报错。
+    private func nearestStep(_ n: Int) -> Int {
+        Self.columnSteps.min(by: { abs($0 - n) < abs($1 - n) }) ?? 5
+    }
+
+    /// 缩小视图 = 缩略图变小 = 列数 +2（照片 App 的减号）
+    @objc private func stepColumnsDown() {
+        let cur = nearestStep(Settings.gridColumnCount)
+        let next = Self.columnSteps.first(where: { $0 > cur }) ?? Self.columnSteps.last!
+        setColumnCount(next)
+    }
+
+    /// 放大视图 = 缩略图变大 = 列数 -2（照片 App 的加号）
+    @objc private func stepColumnsUp() {
+        let cur = nearestStep(Settings.gridColumnCount)
+        let next = Self.columnSteps.last(where: { $0 < cur }) ?? Self.columnSteps.first!
+        setColumnCount(next)
+    }
+
+    private func setColumnCount(_ n: Int) {
+        Settings.gridColumnCount = n
+        relayoutGridColumns()
+        // relayoutGridColumns 里若 rows 没变，setGrid 会被跳过，
+        // 此时卡片尺寸变了但网格布局没重建，需要显式重排一次。
+        thumbnailGrid.reloadFilteredStyle()
+        refreshHeaderButtons()
+    }
+
+    /// 网格样式切换：间距网格 ↔ 正方形填充
+    @objc private func toggleGridStyle() {
+        Settings.gridSquareFill.toggle()
+        ThumbnailItem.fillsSquare = Settings.gridSquareFill
+        // 圆角与填充模式都要让已存在的卡片重画
+        for item in thumbnailGrid.visibleCards() {
+            item.refreshCardSize()
+        }
+        thumbnailGrid.reloadFilteredStyle()
+        refreshHeaderButtons()
+    }
+
+    /// 展开搜索框（从圆钮态）
+    @objc private func expandSearch() {
+        searchExpanded = true
+        applySearchExpansion(animated: false)
+        window?.makeFirstResponder(searchField)
+    }
+
+    /// 让搜索在「圆钮」与「展开输入框」之间切换。
+    ///
+    /// 只用同一个 NSSearchField 切换可见性，不做两个独立控件 ——
+    /// 两者在临界宽度上互相触发显隐会闪。
+    private func applySearchExpansion(animated: Bool) {
+        searchField.isHidden = !searchExpanded
+        searchToggleButton.isHidden = searchExpanded
+        // 展开后宽度跟随可用空间，收起时不参与布局
+        searchWidthConstraint?.isActive = searchExpanded
+        if searchExpanded {
+            // 宽度 = 工具区剩余空间，且不小于 140：
+            // 太窄就没有输入价值，那时不如显示圆钮。
+            let minW: CGFloat = 140
+            searchWidthConstraint?.constant = minW
+        }
+        refreshHeaderButtons()
+    }
+
+    /// 按当前可用宽度决定搜索是「圆钮」还是「展开的长条」。
+    ///
+    /// 判据是工具区左侧还剩多少空间。少于 minWidth 就收起 ——
+    /// 照片 App 也是这个逻辑：窗口不够宽时搜索先让位，
+    /// 因为圆钮始终可点，而被压扁的输入框既看不见也打不了字。
+    private func updateSearchForm() {
+        guard let tools = toolsStack, let row = titleRowStack else { return }
+        let available = tools.frame.minX - (row.frame.maxX + 16)
+        let minWidth: CGFloat = 140
+        let shouldExpand = available >= minWidth + 8
+
+        // 只有「用户主动展开过」或「宽度足够」才展开；
+        // 宽度不足时无论之前什么状态都收起，避免搜索框被压成一条。
+        if !shouldExpand {
+            if searchExpanded {
+                searchExpanded = false
+                applySearchExpansion(animated: false)
+            }
+            return
+        }
+        if searchExpanded {
+            searchWidthConstraint?.constant = available - 8
+        }
+    }
+
+    /// 同步浮栏按钮的可用状态与图标。
+    private func refreshHeaderButtons() {
+        // 返回按钮常驻：根目录时置灰而不是隐藏。
+        //
+        // 隐藏会让标题左右跳动（按钮占 34pt + 间距 8），
+        // 每次进出文件夹标题都位移一次，观感不稳定。
+        // 常驻 + 禁用能让标题位置恒定，也顺带告知「这里已经到头了」。
+        let canGoBack = !(libraryFilter ?? "").isEmpty
+        backButton.isEnabled = canGoBack
+        backButton.alphaValue = canGoBack ? 1.0 : 0.35
+
+        // 列数到达边界时置灰（不隐藏，保持位置稳定）
+        // 语义按「视图缩放」：加号放大视图=列数减少，减号缩小=列数增加。",
+        // 因此列数已在最小档时加号该禁用（无法再放大），反之亦然。
+        // 用夹紧后的档位判断，避免设置里存了非法值时两个按钮都被禁用。
+        let cur = nearestStep(Settings.gridColumnCount)
+        colPlusButton.isEnabled = cur > Self.columnSteps.first!
+        colMinusButton.isEnabled = cur < Self.columnSteps.last!
+
+        // 样式按钮图标反映「当前模式」，而非「点了会变成什么」
+        let fill = Settings.gridSquareFill
+        (gridStyleButton as? CircleGlassButton)?.setSymbol(
+            fill ? "square.grid.3x3.fill" : "square.grid.2x2")
     }
 
     // MARK: 中栏（图库）
@@ -2190,12 +2513,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
         // 比顶栏高度多留 28：图片滚到顶栏下方时，
         // 上方的渐变模糊才有作用空间（否则第一行紧贴边缘，看不出淡出）
         // 顶栏已无背景，只需让出标题行的高度（logo 中心 47 + 少量留白）
-        // 内容从窗口最顶端开始，**穿过顶栏的模糊带**。
+        // 内容初始位置要让开顶栏浮层，避免首行一进来就被模糊掉。
         //
-        // 这是让模糊「看得见」的关键：之前给了 44~56pt 的顶部内边距，
-        // 首行永远停在模糊带下方，浮栏里没有任何东西可模糊，
-        // 于是无论模糊做得多实在，看上去都只是「一条略深的矩形」。
-        thumbnailGrid.setTopContentInset(0)
+        // 之前设 0 是为了「让模糊看得见」——但那样首行永远被压在半透明带里，
+        // 视觉上像还没加载完。正确行为是照片 App 那样：
+        // 初始状态整齐地停在浮栏下方，**向下滚动时**内容才穿进模糊带淡出。
+        // 浮栏高 72，留 60：首行完整露出，并紧贴浮栏下缘（用户再微调 -8pt）。
+        thumbnailGrid.setTopContentInset(60)
         // 图库在顶部 100pt 内渐隐，替代「顶栏模糊」（顶栏是兄弟视图，
         // 玻璃采不到它的内容，只能让图库自己淡出）
         // thumbnailGrid.setTopFade(height: 100)   // 临时禁用，验证滚动
@@ -2865,8 +3189,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     private func relayoutGridColumns() {
         guard window != nil else { return }
 
-        // 固定 5 列，任何窗口尺寸下都不变
-        let cols = 5
+        // 列数由用户在顶栏控制，档位 3/5/7/9（与照片 App 一致）
+        let cols = Settings.gridColumnCount
 
         // 先定网格形状，再调卡片尺寸 —— 顺序反了会被 setGrid 重建的 layout
         // 把 itemSize 覆盖回旧值（实测表现为「算的是 5 列，显示的是 4 列」）。
@@ -3319,6 +3643,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
                              selectedPath: selectedItem?.path)
         updateEmptyState(visibleCount: visible.count)
         updateLibraryHeader(visibleCount: visible.count)
+        refreshHeaderButtons()
         relayoutGridColumns()
         // 侧栏也要跟着刷新（预设可能增删、屏幕可能变化）
         let st = displayStatusMap()
@@ -5962,35 +6287,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
 
     /// 把顶栏标题绑到左栏右缘（间距 8）。
     /// 必须在 sidebar 已加入视图层级之后调用，否则跨视图约束会崩。
+    /// 把标题行（返回按钮 + 两行文字）绑到左栏右缘。
+    ///
+    /// 标题不再是裸的 NSTextField，而是一个含返回按钮的水平 stack ——
+    /// 返回按钮隐藏时 stack 自动收窄，标题就贴到左缘，不需要额外分支。
     private func rebindTitleToSidebar() {
-        guard let title = topTitleView else { return }
+        guard let row = titleRowStack else { return }
         titleLeadingConstraint?.isActive = false
         // 与网格第一列左缘对齐：sidebar.trailing + 8（中栏起点）+ 16（网格内边距）
-        let c = title.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 24)
+        let c = row.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: 24)
         c.isActive = true
         titleLeadingConstraint = c
-
-        // 搜索框左缘贴右栏左缘（+12 与右栏面板内缩对齐），
-        // 但现在右侧多了加号按钮，搜索框要往左缩一个按钮位。
-        searchPlaceholderConstraint?.isActive = false
-        searchFieldLeftConstraint?.isActive = false
-        if detailCollapsed {
-            // 右栏收起：搜索框左缘跟随中栏右缘（中栏此时已铺到窗口右侧）
-            if let mid = libraryPaneView {
-                let sc = searchField.leadingAnchor.constraint(
-                    equalTo: mid.trailingAnchor, constant: -260)
-                sc.isActive = true
-                searchFieldLeftConstraint = sc
-            }
-        } else if let pane = detailPane {
-            // 左缘贴右栏左缘（+12 与面板内缩对齐）。
-            // 右侧的搜索框 trailing 已改由加号按钮决定，宽度会自动收窄，
-            // 不需要再往左让位。
-            let sc = searchField.leadingAnchor.constraint(
-                equalTo: pane.leadingAnchor, constant: 12)
-            sc.isActive = true
-            searchFieldLeftConstraint = sc
-        }
     }
 
     @objc private func showPanel() {
@@ -6089,24 +6396,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSSe
     ///
     /// 系统默认把三个按钮钉在距窗口左/上各 8pt 处，而侧栏面板也从 8pt 起、
     /// 圆角 16 —— 按钮外角到圆角圆心 22.6pt > 16，正好压在弧线上被切。
-    /// 面板位置不能动（动了就没有边距），所以只能把按钮本身往内移。
-    /// 移到距边 16pt 后，外角到圆心 11.3pt < 16，完整落在圆角内。
+    ///
+    /// 关键：这个方法必须**幂等**，因为窗口每次布局/缩放后按钮位置都会被
+    /// AppKit 重置回默认值。用「记录原始位置」而不是「累加偏移」实现，
+    /// 重复调用不会把按钮越推越远（之前正是这个 bug 导致位置漂移）。
     private func alignTrafficLights(_ window: NSWindow) {
         guard let close = window.standardWindowButton(.closeButton),
               let mini = window.standardWindowButton(.miniaturizeButton),
-              let zoom = window.standardWindowButton(.zoomButton),
-              let container = close.superview else { return }
+              let zoom = window.standardWindowButton(.zoomButton) else { return }
 
-        // 水平 +8、垂直 -8：让三个按钮整体移到 (16,16) 附近，
-        // 与面板圆角（半径 16、起点 8）保持均匀距离。
-        // 只下移不动横向的话，第一个按钮仍贴着左侧弧线，看起来「挤在角上」。
-        let dx: CGFloat = 8
-        let dy: CGFloat = 8
+        // AppKit 给这三个按钮的默认起点是 (8, 8)（窗口坐标系，原点左下）。
+        // 目标：水平 +8、垂直 -8，落到 (16, 16) 附近，落在圆角内侧。
+        // 直接按绝对值设置，不做累加 —— 幂等，重复调用安全。
+        let targetY: CGFloat = 8 - 8
+        var x: CGFloat = 16
         for b in [close, mini, zoom] {
-            b.setFrameOrigin(NSPoint(x: b.frame.origin.x + dx,
-                                     y: b.frame.origin.y - dy))
+            b.setFrameOrigin(NSPoint(x: x, y: targetY))
+            x += b.frame.width + 6
         }
-        _ = container
     }
 
     func windowWillClose(_ notification: Notification) {

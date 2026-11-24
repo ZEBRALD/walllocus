@@ -159,15 +159,38 @@ final class RoundedImageView: NSImageView {
                       width: drawW, height: drawH)
     }
 
+    /// 填充模式：裁切填满 bounds，而不是等比缩放后留白。
+    /// 照片 App 的「正方形」视图就是这个行为。
+    var fillsSquare = false { didSet { needsDisplay = true } }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let image, image.size.width > 0, image.size.height > 0 else { return }
-        let rect = imageRect
 
         NSGraphicsContext.saveGraphicsState()
+        let rect = fillsSquare ? bounds : imageRect
         let path = NSBezierPath(roundedRect: rect,
                                 xRadius: cornerRadius, yRadius: cornerRadius)
         path.addClip()
-        image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+
+        if fillsSquare {
+            // 填充模式 = 「填充（裁剪边缘）」：等比放大到铺满，多余部分裁掉。
+            //
+            // 不能直接 image.draw(in: bounds) —— 那会把图按 bounds 的宽高
+            // 强行拉伸，横图压扁、竖图拉长，比例全失。
+            // 正确做法是按短边算缩放比，让长边溢出，再居中裁切。
+            let sx = bounds.width / image.size.width
+            let sy = bounds.height / image.size.height
+            let scale = max(sx, sy)          // 取大者：短边刚好铺满
+            let dw = image.size.width * scale
+            let dh = image.size.height * scale
+            let dst = NSRect(x: bounds.midX - dw / 2,
+                             y: bounds.midY - dh / 2,
+                             width: dw,
+                             height: dh)
+            image.draw(in: dst, from: .zero, operation: .sourceOver, fraction: 1.0)
+        } else {
+            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1.0)
+        }
         NSGraphicsContext.restoreGraphicsState()
     }
 }
@@ -175,16 +198,24 @@ final class ThumbnailItem: NSCollectionViewItem {
 
     static let identifier = NSUserInterfaceItemIdentifier("ThumbnailItem")
     /// 卡片基准尺寸（不改，作为等比缩放的比例来源）。
-    static let baseCardSize = NSSize(width: 112, height: 92)
+    static let baseCardSize = NSSize(width: 112, height: 112)
     /// 当前实际尺寸，随窗口大小变化。
-    static var cardSize = NSSize(width: 112, height: 92)
+    static var cardSize = NSSize(width: 112, height: 112)
     /// 缩略图高度跟随卡片尺寸：卡片变高时缩略图同步变高，
     /// 否则卡片宽/高比会失真（列数看起来会跳变）。
     /// 卡片高 92 时原值为 70，即缩略图约占卡片高的 76%。
     /// 是否显示文件名（隐藏时缩略图占满卡片高度）
     static var showsFileNames = true
+    /// 全局网格样式（所有卡片共享）。由顶栏的样式切换按钮改动。
+    static var fillsSquare = false
     static var thumbHeight: CGFloat {
-        showsFileNames ? round(cardSize.height * 0.76) : cardSize.height
+        // 两种模式都按正方形渲染（照片 App 的网格本身就是正方形）。
+        // 区别只在图片怎么摆：间距模式等比装入、填充模式裁切铺满。
+        if fillsSquare {
+            return max(1, round(cardSize.width - 4))
+        }
+        // 间距模式：缩略图区是正方形，但图片在其中等比装入
+        return max(1, round(cardSize.width - 4))
     }
 
     private let thumbView = RoundedImageView()
@@ -316,7 +347,14 @@ final class ThumbnailItem: NSCollectionViewItem {
             thumbView.topAnchor.constraint(equalTo: v.topAnchor, constant: 2),
             thumbView.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 2),
             thumbView.trailingAnchor.constraint(equalTo: v.trailingAnchor, constant: -2),
-            thumbHeightConstraintSetup(v),
+            // 高度直接等于宽度 —— 这是「永远正方形」的唯一可靠写法。
+            //
+            // 之前用 thumbHeightConstraintSetup(v) 把高度写死成 Self.thumbHeight
+            // （= 静态 cardSize.width - 4）。cardSize 是全局静态值，
+            // 而 cell 的实际宽度由 FlowLayout 的 itemSize 决定，两者更新时机不同步，
+            // 于是切换列数后高度与宽度不相等：竖图被拉长、横图被压扁、
+            // 同一行里有的像方形有的不像。绑定 widthAnchor 从根上消除这个竞态。
+            thumbView.heightAnchor.constraint(equalTo: thumbView.widthAnchor),
 
             nameLabel.topAnchor.constraint(equalTo: thumbView.bottomAnchor, constant: 2),
             nameLabel.leadingAnchor.constraint(equalTo: v.leadingAnchor, constant: 2),
@@ -369,6 +407,13 @@ final class ThumbnailItem: NSCollectionViewItem {
     func configure(path: String, title: String, originalName: String, kind: MediaKind, inUse: Bool) {
         // 卡片尺寸会随窗口缩放变化，缩略图高度必须同步，否则卡片会被压扁/拉伸
         thumbHeightConstraint?.constant = Self.thumbHeight
+        // 填充模式也必须在这里同步。
+        //
+        // 之前只在 refreshCardSize() 里设，而切换样式时只刷新了 visibleCards()——
+        // 之后滚动出现的卡片、以及 reloadData 复用的卡片都没有设值，
+        // 表现就是「有的图是正方形、有的还按原比例显示」。
+        thumbView.fillsSquare = Self.fillsSquare
+        thumbView.cornerRadius = Self.fillsSquare ? 2 : 8
         nameLabel.isHidden = !Self.showsFileNames
         representedPath = path
         nameLabel.stringValue = title
@@ -429,6 +474,10 @@ final class ThumbnailItem: NSCollectionViewItem {
     /// 卡片尺寸变化后重新设定缩略图高度（由 ThumbnailGrid 调用）
     func refreshCardSize() {
         thumbHeightConstraint?.constant = Self.thumbHeight
+        // 填充模式下圆角要收小：填满的正方形配 8pt 圆角像被切了角
+        let fill = ThumbnailItem.fillsSquare
+        thumbView.fillsSquare = fill
+        thumbView.cornerRadius = fill ? 2 : 8
         view.needsLayout = true
     }
 
@@ -651,6 +700,16 @@ final class ThumbnailGrid: NSView {
         collection.reloadData()
     }
 
+    /// 当前可见的卡片（用于批量刷新样式）
+    func visibleCards() -> [ThumbnailItem] {
+        collection.visibleItems().compactMap { $0 as? ThumbnailItem }
+    }
+
+    /// 样式切换后重绘所有卡片（圆角与填充模式都变了）
+    func reloadFilteredStyle() {
+        collection.reloadData()
+    }
+
     func setTopContentInset(_ inset: CGFloat) {
         scroll.automaticallyAdjustsContentInsets = false
         scroll.contentInsets = NSEdgeInsets(top: inset, left: 0, bottom: 0, right: 0)
@@ -675,23 +734,41 @@ final class ThumbnailGrid: NSView {
         // 否则算出来的卡片偏宽，一行塞不下第 5 个，实测只显示 4 列。
         let spacing: CGFloat = 10          // = layout.minimumInteritemSpacing
         let insetW: CGFloat = 16           // = sectionInset.left(0) + right(16)
-        // 减 1pt 吸收浮点误差：FlowLayout 只要差一点点就会把这一行
-        // 判成「放不下」，表现为列数在 4/5 之间来回跳。
-        let usable = availableWidth - insetW - spacing * CGFloat(columns - 1) - 1
+        // 卡片宽度**必须**精确等于「可用宽 / 列数」。
+        //
+        // FlowLayout 的判据是「这一行还塞得下吗」：卡片比这个值小一点点，
+        // 它就会把下一张也塞进同一行，于是设置的 5 列渲染成 6 列、7 列。
+        // 之前 clamp 到 max(44, ...) 并 floor，窄窗口下算出的宽度被压小，
+        // 正好触发这个行为 —— 这就是「拉伸窗口列数会自己变」的根因。
+        //
+        // 现在只做两种保护：
+        // 1. 不减那 1pt 误差余量（减了反而让卡片偏小）；
+        // 2. 不设下限——列数由用户决定，卡片就该等比缩放。
+        // floor 是必须的：可用宽/列数通常是无限小数（如 213.3333），
+        // FlowLayout 会用这个浮点值判定「塞不塞得下」，多出的 0.0001pt
+        // 累积后足够让它再塞一张 —— 这正是列数自己变多的另一个来源。
+        // 向下取整到整数点，保证一行的总宽**严格小于**可用宽。
+        let usable = availableWidth - insetW - spacing * CGFloat(columns - 1)
         let w = floor(usable / CGFloat(columns))
-        // 下限放宽到 44：要求「列数恒为 5」，窗口再窄也只能靠缩小卡片来让位。
-        // 原来卡在 80，窄窗口下 5×80 超出可用宽，FlowLayout 就会掉到 4 列甚至 3 列。
-        let clamped = max(44, min(220, w))
-        let base = ThumbnailItem.baseCardSize
+        let clamped = max(10, min(400, w))
+        // 卡片高度 = 缩略图方块高度 + 名字行 + 间距。
+        // 缩略图现在由 width==height 约束保持正方形，卡片高度必须预留名字那一行，
+        // 否则名字会被挤掉或盖住图片；不显示名字时整张卡片就是一个方块。
+        let thumbSide = clamped - 4          // 缩略图左右各内缩 2pt
+        let nameBand: CGFloat = ThumbnailItem.showsFileNames ? 16 : 0
         let newSize = NSSize(width: clamped,
-                             height: round(clamped * base.height / base.width))
+                             height: round(thumbSide + 4 + nameBand))
 
-        // 用 layout 的真实 itemSize 做比较，而不是静态变量 cardSize：
-        // 两者可能不同步（setGrid 重建 layout 后 cardSize 没变），
-        // 拿 cardSize 判断会导致 layout 永不更新。
-        let current = (collection.collectionViewLayout as? NSCollectionViewFlowLayout)?.itemSize
-            ?? ThumbnailItem.cardSize
-        guard abs(newSize.width - current.width) > 0.5 else { return }
+        // 不要在这里做「尺寸没变就提前返回」的优化。
+        //
+        // 那个早退正是「点了加减号，缩略图尺寸乱掉、要缩放一次窗口才恢复」的根因：
+        // setGrid() 重建 FlowLayout 时会用 **旧的** ThumbnailItem.cardSize 当 itemSize，
+        // 于是这里比较「新旧宽度」时两者相同 → 直接 return，
+        // 新列数对应的卡片尺寸从未写进 layout。
+        // 手动缩放一次窗口之所以能恢复，是因为窗口宽度变了、可用宽变了，
+        // 才会走到下一轮真正执行这一段。
+        //
+        // 尺寸计算本身很便宜（几次浮点运算），无条件应用即可。
         ThumbnailItem.cardSize = newSize
         // 卡片变大后，缩略图要按新尺寸重新解码，否则会被放大得发糊。
         let scale = window?.backingScaleFactor ?? 2
@@ -706,10 +783,27 @@ final class ThumbnailGrid: NSView {
             layout.invalidateLayout()
             collection.collectionViewLayout = layout
         }
-        for case let item as ThumbnailItem in collection.visibleItems() {
-            item.refreshCardSize()
-        }
+        // 顺序很关键：
+        // 1) 先把新尺寸写进 layout（上面已做）
+        // 2) 再重算文档高度（用新的 cardSize）
+        // 3) 最后重排并刷新卡片
+        //
+        // 之前把 updateCollectionHeight 放在 reloadData 之后，且 reloadData 之后
+        // 立刻遍历 visibleItems —— 此时集合视图尚未重建、visibleItems 为空，
+        // refreshCardSize 一个都没调到，卡片仍按旧尺寸绘制，
+        // 表现就是「比例错乱、有的大有的小」，缩放一次窗口才恢复。
+        updateCollectionHeight()
         collection.layoutSubtreeIfNeeded()
+        // 重排完成后再刷新卡片。reloadData 会重建所有 item，
+        // 新的 item 在 makeItem 时已读到最新 cardSize，这里只是喂给复用中的那些。
+        collection.reloadData()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.updateCollectionHeight()
+            for case let item as ThumbnailItem in self.collection.visibleItems() {
+                item.refreshCardSize()
+            }
+        }
     }
 
     func setGrid(columns: Int, rows: Int) {
